@@ -1,0 +1,19 @@
+#ifndef PARAMS_HEADER
+#define PARAMS_HEADER
+
+#define CLUSTER_SIZE 32
+
+#define TRANSFER_FUNCTION_LIMIT 50.0f
+#define TRANSFER_WIDTH 1.0f
+#define NEGATIVE_TRANSFER_FACTOR 0.1f
+
+#define MAX_WEIGHT_CHANGE 0.1f
+
+#define STEPFACTOR 1e-4f
+
+#define VALUE_DECAY_FACTOR 0.995
+
+#define POS_VALUE_GOAL 1.0f
+#define NEG_VALUE_GOAL -1.0f
+
+#endif
