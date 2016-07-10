@@ -102,7 +102,7 @@ private:
 
 };
 
-ValueMatrices instantiateValueMatrices(ValueMatrices* vm, ValueParameters* vp);
+void instantiateValueMatrices(ValueMatrices* vm, ValueParameters* vp);
 void linkValueLayers(ValueCollection* vc, ThoughtNet* tn);
 void copyValueLayersToDevice(ValueCollection* vc);
 

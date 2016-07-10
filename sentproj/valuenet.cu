@@ -41,7 +41,7 @@ ValueCollection ValueNet::createValueCollection(ThoughtNet* tn) {
 		if (i == numLayers - 1)
 			vp->numThoughtInputs = 0;
 		else
-			vp->numThoughtInputs = tn->getThoughtCollection().thoughtPars[i].numOutputs;
+			vp->numThoughtInputs = tn->getThoughtCollection()->thoughtPars[i].numOutputs;
 
 		vp->backwardConnectivity = std::min(2 * CLUSTER_SIZE, (int)vp->numInputs);
 		vp->thoughtConnectivity = std::min(CLUSTER_SIZE, (int)vp->numThoughtInputs);
@@ -69,13 +69,15 @@ ValueCollection ValueNet::createValueCollection(ThoughtNet* tn) {
 	}
 	linkValueLayers(&vc, tn);
 	copyValueLayersToDevice(&vc);
+
+	return vc;
 }
 
 ValueCollection ValueNet::getValueCollection() {
 	return valueCollection;
 }
 
-ValueMatrices instantiateValueMatrices(ValueMatrices* vm, ValueParameters* vp) {
+void instantiateValueMatrices(ValueMatrices* vm, ValueParameters* vp) {
 	checkCudaErrors(cudaMalloc(&vm->inlayer, vp->numInputs*sizeof(float)));
 	checkCudaErrors(cudaMalloc(&vm->outlayer, vp->numOutputs*sizeof(float)));
 
@@ -109,7 +111,6 @@ ValueMatrices instantiateValueMatrices(ValueMatrices* vm, ValueParameters* vp) {
 	checkCudaErrors(cudaMemcpy(vm->thresholds, h_thresholds, numThresholds*sizeof(float), cudaMemcpyHostToDevice));
 	delete [] h_thresholds;
 
-	size_t numThresholds = vp->numOutputs;
 	float* h_thresholdChanges = new float[numThresholds];
 	for (size_t i = 0; i < numThresholds; i++) {
 		h_thresholdChanges[i] = 0;
@@ -140,7 +141,7 @@ ValueMatrices instantiateValueMatrices(ValueMatrices* vm, ValueParameters* vp) {
 }
 
 void linkValueLayers(ValueCollection* vc, ThoughtNet* tn) {
-	ThoughtCollection* tc = &tn->getThoughtCollection();
+	ThoughtCollection* tc = tn->getThoughtCollection();
 	if (vc->numValueLayers != tc->numThoughtLayers) {
 		std::cout << "ValueNet and ThoughtNet have different numbers of layers!";
 		throw new std::runtime_error("ValueNet and ThoughtNet have different numbers of layers!");
@@ -224,7 +225,7 @@ void ValueNet::backPropagate() {
 		dim3 thoughtNBlocks(vp->backThoughtNBlockX);
 		dim3 thoughtShape(vp->backThoughtBlockX, vp->backThoughtBlockY);
 		size_t thoughtShared = vm->bpThoughtSharedMem;
-		backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(vm, vp, posErrorFact, negErrorFact);
+		backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(vm, vp, turn1front, posErrorFact, negErrorFact);
 		checkCudaErrors(cudaPeekAtLastError());
 	}
 
@@ -240,7 +241,7 @@ void ValueNet::backPropagate() {
 	dim3 thoughtNBlocks(vp->backThoughtNBlockX);
 	dim3 thoughtShape(vp->backThoughtBlockX, vp->backThoughtBlockY);
 	size_t thoughtShared = vm->bpThoughtSharedMem;
-	backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(vm, vp, posErrorFact, negErrorFact);
+	backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(vm, vp, turn1front, posErrorFact, negErrorFact);
 	checkCudaErrors(cudaPeekAtLastError());
 }
 

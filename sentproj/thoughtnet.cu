@@ -43,13 +43,15 @@ ThoughtCollection ThoughtNet::createThoughtCollection() {
 	}
 	linkThoughtLayers(&tc);
 	copyThoughtLayersToDevice(&tc);
+
+	return tc;
 }
 
-ThoughtCollection ThoughtNet::getThoughtCollection() {
-	return thoughtCollection;
+ThoughtCollection* ThoughtNet::getThoughtCollection() {
+	return &thoughtCollection;
 }
 
-ThoughtMatrices instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp) {
+void instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp) {
 	checkCudaErrors(cudaMalloc(&tm->inlayer1, tp->numInputs*sizeof(float)));
 	checkCudaErrors(cudaMalloc(&tm->inlayer2, tp->numInputs*sizeof(float)));
 	checkCudaErrors(cudaMalloc(&tm->outlayer1, tp->numOutputs*sizeof(float)));

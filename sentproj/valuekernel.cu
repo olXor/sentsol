@@ -16,31 +16,6 @@ __host__ __device__ float valueTransferDerivative(float in) {
 	return 1.0f / (1.0f + exp(-in / TRANSFER_WIDTH)) + NEGATIVE_TRANSFER_FACTOR / (1.0f + exp(in / TRANSFER_WIDTH));
 }
 
-#ifdef MAX_WEIGHT_CHANGE
-__device__ float boundChange(float change) {
-	if (change > MAX_WEIGHT_CHANGE)
-		change = MAX_WEIGHT_CHANGE;
-	else if (change < -MAX_WEIGHT_CHANGE)
-		change = -MAX_WEIGHT_CHANGE;
-	return change;
-}
-#endif
-
-__device__ bool isNan(float num) {
-	return !isfinite(num);
-}
-
-__device__ void sumVector(float* vec, size_t size, size_t threadNum, size_t numThreads) {
-	size_t stride = 1;
-	while (stride < size) {
-		for (size_t j = 2 * stride*threadNum; j + stride < size; j += 2 * stride*numThreads) {
-			vec[j] += vec[j + stride];
-		}
-		stride *= 2;
-		__syncthreads();
-	}
-}
-
 __global__ void computeValueLayer(ValueMatrices* vm, ValueParameters* vp, bool turn1front) {
 	size_t outNeuron = blockIdx.x;
 	size_t clusterStart = outNeuron - outNeuron%CLUSTER_SIZE;
@@ -102,11 +77,11 @@ __global__ void backPropagateValueToValue(ValueMatrices* vm, ValueParameters* vp
 
 	size_t numInputs = vp->numInputs;
 	size_t numOutputs = vp->numOutputs;
-	size_t numOutputClusters = (numOutputs%CLUSTER_SIZE == 0 ? numOutputs / CLUSTER_SIZE : numOutputs / CLUSTER_SIZE + 1);
+	//size_t numOutputClusters = (numOutputs%CLUSTER_SIZE == 0 ? numOutputs / CLUSTER_SIZE : numOutputs / CLUSTER_SIZE + 1);
 
 	size_t inputClusterStart = inNeuron - inNeuron % CLUSTER_SIZE;
 	size_t numClusterOffsets = (backCon % CLUSTER_SIZE == 0 ? backCon / CLUSTER_SIZE : backCon / CLUSTER_SIZE + 1);
-	size_t numClusterPositions = std::min((int)numOutputs, CLUSTER_SIZE);
+	size_t numClusterPositions = ((int)numOutputs < CLUSTER_SIZE ? numOutputs : CLUSTER_SIZE);
 
 	extern __shared__ float errors[];	//numClusterOffsets*numClusterPositions
 
@@ -170,7 +145,6 @@ __global__ void backPropagateValueToValueFirstLayer(ValueMatrices* vm, ValuePara
 	size_t totalCon = backCon + thoughtCon;
 
 	size_t numInputs = vp->numInputs;
-	size_t numOutputs = vp->numOutputs;
 
 	float outErrorTD = vm->outerrors[outNeuron] * vm->outTDs[outNeuron];
 	if (inConnection == 0) {
@@ -213,11 +187,10 @@ __global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* 
 
 	size_t numThoughts = vp->numThoughtInputs;
 	size_t numOutputs = vp->numOutputs;
-	size_t numOutputClusters = (numOutputs%CLUSTER_SIZE == 0 ? numOutputs / CLUSTER_SIZE : numOutputs / CLUSTER_SIZE + 1);
+	//size_t numOutputClusters = (numOutputs%CLUSTER_SIZE == 0 ? numOutputs / CLUSTER_SIZE : numOutputs / CLUSTER_SIZE + 1);
 
-	size_t thoughtClusterStart = thoughtNeuron - thoughtNeuron % CLUSTER_SIZE;
 	size_t numClusterOffsets = (thoughtCon % CLUSTER_SIZE == 0 ? thoughtCon / CLUSTER_SIZE : thoughtCon / CLUSTER_SIZE + 1);
-	size_t numClusterPositions = std::min((int)numOutputs, CLUSTER_SIZE);
+	size_t numClusterPositions = ((int)numOutputs < CLUSTER_SIZE ? numOutputs : CLUSTER_SIZE);
 
 	float* thoughtlayer;
 	if (turn1front)
@@ -269,7 +242,6 @@ size_t getValueBackPropValueToThoughtSharedSize(ValueParameters* vp) {
 
 __global__ void updateValueWeights(ValueMatrices* vm, ValueParameters* vp, float pleasurePain) {
 	size_t outNeuron = blockIdx.x;
-	size_t clusterStart = outNeuron - outNeuron%CLUSTER_SIZE;
 	size_t inConnection = threadIdx.x;
 	size_t numInThreads = vp->updateBlockX;	//totalCon
 
@@ -277,10 +249,7 @@ __global__ void updateValueWeights(ValueMatrices* vm, ValueParameters* vp, float
 	size_t thoughtCon = vp->thoughtConnectivity;
 	size_t totalCon = backCon + thoughtCon;
 
-	size_t numInputs = vp->numInputs;
-	size_t numOutputs = vp->numOutputs;
-
-	for (size_t i = 0; i < totalCon; i++) {
+	for (size_t i = inConnection; i < totalCon; i += numInThreads) {
 		size_t weightNum = i + outNeuron*totalCon;
 		if (pleasurePain > 0)
 			vm->weights[weightNum] += pleasurePain*vm->posWeightChanges[weightNum];

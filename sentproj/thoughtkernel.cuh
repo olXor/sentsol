@@ -7,6 +7,7 @@
 #include "params.h"
 
 #include "thoughtnet.cuh"
+#include "commonkernel.cuh"
 
 //forward declarations
 struct ThoughtMatrices;

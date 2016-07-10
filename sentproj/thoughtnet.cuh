@@ -53,7 +53,7 @@ class ThoughtNet {
 public:
 	ThoughtNet(size_t nInputs, size_t nOutputs, size_t nLayers, size_t nClusters);
 	~ThoughtNet();
-	ThoughtCollection getThoughtCollection();
+	ThoughtCollection* getThoughtCollection();
 	void incrementTurn();
 	bool turn1Front();
 
@@ -82,7 +82,7 @@ private:
 	ThoughtCollection createThoughtCollection();
 };
 
-ThoughtMatrices instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp);
+void instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp);
 void linkThoughtLayers(ThoughtCollection* tc);
 void copyThoughtLayersToDevice(ThoughtCollection* tc);
 
