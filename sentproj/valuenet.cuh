@@ -11,7 +11,6 @@
 #include <stdexcept>
 
 #include "thoughtnet.cuh"
-#include "valuekernel.cuh"
 
 struct ValueMatrices {
 	float* inlayer;
@@ -85,6 +84,8 @@ public:
 	void compute();
 	void backPropagate();
 	void updateWeights(float pleasurePain);
+
+	void saveWeights(std::string fname);
 
 private:
 	size_t turn = 0;

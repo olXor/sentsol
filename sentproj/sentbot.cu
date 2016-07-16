@@ -1,4 +1,5 @@
 #include "sentbot.cuh"
+#include <sstream>
 
 SentBot::SentBot(size_t nInputs, size_t nOutputs, size_t nLayers, size_t nClusters) {
 	thoughtNet = new ThoughtNet(nInputs, nOutputs, nLayers, nClusters);
@@ -31,7 +32,7 @@ void SentBot::takeTurn() {
 
 	thoughtNet->compute();
 
-	copyOutputToHost << <1, 1, 0 >> >(thoughtNet->getLastLevelMatrices(), thoughtNet->getLastLevelParameters(), d_outputs, thoughtNet->turn1Front());
+	thoughtNet->copyOutputToHost(d_outputs);
 	checkCudaErrors(cudaPeekAtLastError());
 
 	checkCudaErrors(cudaEventRecord(calcDone));
@@ -47,4 +48,17 @@ void SentBot::takeTurn() {
 
 void SentBot::givePleasurePain(float pleasurePain) {
 	valueNet->updateWeights(pleasurePain);
+}
+
+void SentBot::saveWeights(std::string fname) {
+	std::stringstream base;
+	base << "saveweights/" << fname;
+
+	std::stringstream tss;
+	tss << base.str() << "thought";
+	thoughtNet->saveWeights(tss.str());
+
+	std::stringstream vss;
+	vss << base.str() << "value";
+	valueNet->saveWeights(vss.str());
 }

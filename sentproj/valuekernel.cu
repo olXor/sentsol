@@ -16,6 +16,32 @@ __host__ __device__ float valueTransferDerivative(float in) {
 	return 1.0f / (1.0f + exp(-in / TRANSFER_WIDTH)) + NEGATIVE_TRANSFER_FACTOR / (1.0f + exp(in / TRANSFER_WIDTH));
 }
 
+//apparently we need to have these generic helper functions in every compilation unit, aka in every file. Annoying!
+#ifdef MAX_WEIGHT_CHANGE
+__device__ float valueBoundChange(float change) {
+	if (change > MAX_WEIGHT_CHANGE)
+		change = MAX_WEIGHT_CHANGE;
+	else if (change < -MAX_WEIGHT_CHANGE)
+		change = -MAX_WEIGHT_CHANGE;
+	return change;
+}
+#endif
+
+__device__ bool valueIsNan(float num) {
+	return !isfinite(num);
+}
+
+__device__ void valueSumVector(float* vec, size_t size, size_t threadNum, size_t numThreads) {
+	size_t stride = 1;
+	while (stride < size) {
+		for (size_t j = 2 * stride*threadNum; j + stride < size; j += 2 * stride*numThreads) {
+			vec[j] += vec[j + stride];
+		}
+		stride *= 2;
+		__syncthreads();
+	}
+}
+
 __global__ void computeValueLayer(ValueMatrices* vm, ValueParameters* vp, bool turn1front) {
 	size_t outNeuron = blockIdx.x;
 	size_t clusterStart = outNeuron - outNeuron%CLUSTER_SIZE;
@@ -49,7 +75,7 @@ __global__ void computeValueLayer(ValueMatrices* vm, ValueParameters* vp, bool t
 
 	__syncthreads();
 
-	sumVector(outputs, totalCon, inConnection, numInThreads);
+	valueSumVector(outputs, totalCon, inConnection, numInThreads);
 
 	if (threadIdx.x == 0) {
 		vm->outlayer[outNeuron] = valueTransferFunction(outputs[0] - vm->thresholds[outNeuron]);
@@ -60,7 +86,10 @@ __global__ void computeValueLayer(ValueMatrices* vm, ValueParameters* vp, bool t
 }
 
 size_t getValueComputeSharedSize(ValueParameters* vp) {
-	return vp->backwardConnectivity + vp->thoughtConnectivity;
+	size_t size = 0;
+	size += vp->backwardConnectivity + vp->thoughtConnectivity;
+	size *= sizeof(float);
+	return size;
 }
 
 //note: this only works for layers other than the first, and assumes that numInputs >= numOutputs
@@ -94,7 +123,7 @@ __global__ void backPropagateValueToValue(ValueMatrices* vm, ValueParameters* vp
 			size_t errorIndex = i*numClusterPositions + j;
 			size_t conNum = (numInputs + inNeuron - outClusterStart) % numInputs;
 			size_t weightPos = conNum + outNeuron*totalCon;
-			if (outNeuron > numOutputs || weightPos > backCon)
+			if (outNeuron > numOutputs || conNum > backCon)
 				errors[errorIndex] = 0;
 			else {
 				float outErrorTD = vm->outerrors[outNeuron] * vm->outTDs[outNeuron];
@@ -102,14 +131,14 @@ __global__ void backPropagateValueToValue(ValueMatrices* vm, ValueParameters* vp
 
 				float change = outErrorTD * vm->inlayer[inNeuron];
 #ifdef MAX_WEIGHT_CHANGE
-				change = boundChange(change);
+				change = valueBoundChange(change);
 #endif
 				vm->posWeightChanges[weightPos] = vm->posWeightChanges[weightPos]*VALUE_DECAY_FACTOR - change * posErrorFact[0];
 				vm->negWeightChanges[weightPos] = vm->negWeightChanges[weightPos]*VALUE_DECAY_FACTOR - change * negErrorFact[0];
 				
 				//threshold
 #ifdef MAX_WEIGHT_CHANGE
-				outErrorTD = boundChange(outErrorTD);
+				outErrorTD = valueBoundChange(outErrorTD);
 #endif
 				if (inNeuron == outClusterStart) {
 					vm->posThresholdChanges[outNeuron] += outErrorTD * posErrorFact[0];
@@ -122,7 +151,7 @@ __global__ void backPropagateValueToValue(ValueMatrices* vm, ValueParameters* vp
 	__syncthreads();
 
 	//now finalize the error propagation
-	sumVector(errors, numClusterOffsets*numClusterPositions, threadIdx.x + numOutNeuronThreads*threadIdx.y, numOutNeuronThreads*numOffsetThreads);
+	valueSumVector(errors, numClusterOffsets*numClusterPositions, threadIdx.x + numOutNeuronThreads*threadIdx.y, numOutNeuronThreads*numOffsetThreads);
 
 	vm->inerrors[inNeuron] = errors[0];
 }
@@ -131,7 +160,11 @@ size_t getValueBackPropValueToValueSharedSize(ValueParameters* vp) {
 	size_t backCon = vp->backwardConnectivity;
 	size_t numClusterOffsets = (backCon % CLUSTER_SIZE == 0 ? backCon / CLUSTER_SIZE : backCon / CLUSTER_SIZE + 1);
 	size_t numClusterPositions = std::min((int)vp->numOutputs, CLUSTER_SIZE);
-	return numClusterOffsets*numClusterPositions;
+
+	size_t size = 0;
+	size += numClusterOffsets*numClusterPositions;
+	size *= sizeof(float);
+	return size;
 }
 
 __global__ void backPropagateValueToValueFirstLayer(ValueMatrices* vm, ValueParameters* vp, float* posErrorFact, float* negErrorFact) {
@@ -149,7 +182,7 @@ __global__ void backPropagateValueToValueFirstLayer(ValueMatrices* vm, ValuePara
 	float outErrorTD = vm->outerrors[outNeuron] * vm->outTDs[outNeuron];
 	if (inConnection == 0) {
 #ifdef MAX_WEIGHT_CHANGE
-		float threshchange = boundChange(outErrorTD);
+		float threshchange = valueBoundChange(outErrorTD);
 #else
 		float threshchange = outErrorTD;
 #endif
@@ -160,7 +193,7 @@ __global__ void backPropagateValueToValueFirstLayer(ValueMatrices* vm, ValuePara
 		float change = outErrorTD * vm->inlayer[(clusterStart + i) % numInputs];
 
 #ifdef MAX_WEIGHT_CHANGE
-		change = boundChange(change);
+		change = valueBoundChange(change);
 #endif
 		size_t weightPos = i + totalCon*outNeuron;
 		vm->posWeightChanges[weightPos] = vm->posWeightChanges[weightPos] * VALUE_DECAY_FACTOR - change * posErrorFact[0];
@@ -209,7 +242,7 @@ __global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* 
 			size_t errorIndex = i*numClusterPositions + j;
 			size_t conNum = (numThoughts + thoughtNeuron - outClusterStart) % numThoughts;
 			size_t weightPos = backCon + conNum + outNeuron*totalCon;
-			if (outNeuron > numOutputs || weightPos > totalCon || weightPos <= backCon)
+			if (outNeuron > numOutputs || conNum > totalCon || conNum <= backCon)
 				errors[errorIndex] = 0;
 			else {
 				float outErrorTD = vm->outerrors[outNeuron] * vm->outTDs[outNeuron];
@@ -217,7 +250,7 @@ __global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* 
 
 				float change = outErrorTD * thoughtlayer[thoughtNeuron];
 #ifdef MAX_WEIGHT_CHANGE
-				change = boundChange(change);
+				change = valueBoundChange(change);
 #endif
 				vm->posWeightChanges[weightPos] = vm->posWeightChanges[weightPos] * VALUE_DECAY_FACTOR - change * posErrorFact[0];
 				vm->negWeightChanges[weightPos] = vm->negWeightChanges[weightPos] * VALUE_DECAY_FACTOR - change * negErrorFact[0];
@@ -228,7 +261,7 @@ __global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* 
 	__syncthreads();
 
 	//now finalize the error propagation
-	sumVector(errors, numClusterOffsets*numClusterPositions, threadIdx.x + numOutNeuronThreads*threadIdx.y, numOutNeuronThreads*numOffsetThreads);
+	valueSumVector(errors, numClusterOffsets*numClusterPositions, threadIdx.x + numOutNeuronThreads*threadIdx.y, numOutNeuronThreads*numOffsetThreads);
 
 	vm->thoughterrors[thoughtNeuron] = errors[0];
 }
@@ -237,7 +270,11 @@ size_t getValueBackPropValueToThoughtSharedSize(ValueParameters* vp) {
 	size_t thoughtCon = vp->thoughtConnectivity;
 	size_t numClusterOffsets = (thoughtCon % CLUSTER_SIZE == 0 ? thoughtCon / CLUSTER_SIZE : thoughtCon / CLUSTER_SIZE + 1);
 	size_t numClusterPositions = std::min((int)vp->numOutputs, CLUSTER_SIZE);
-	return numClusterOffsets*numClusterPositions;
+
+	size_t size = 0;
+	size += numClusterOffsets*numClusterPositions;
+	size *= sizeof(float);
+	return size;
 }
 
 __global__ void updateValueWeights(ValueMatrices* vm, ValueParameters* vp, float pleasurePain) {
@@ -254,9 +291,7 @@ __global__ void updateValueWeights(ValueMatrices* vm, ValueParameters* vp, float
 		if (pleasurePain > 0)
 			vm->weights[weightNum] += pleasurePain*vm->posWeightChanges[weightNum];
 		else
-			vm->weights[weightNum] += pleasurePain*vm->negWeightChanges[weightNum];
-		vm->posWeightChanges[weightNum] = 0;
-		vm->negWeightChanges[weightNum] = 0;
+			vm->weights[weightNum] -= pleasurePain*vm->negWeightChanges[weightNum];
 	}
 }
 

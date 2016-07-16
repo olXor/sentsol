@@ -14,6 +14,8 @@ public:
 	void takeTurn();
 	void givePleasurePain(float pleasurePain);
 
+	void saveWeights(std::string fname);
+
 private:
 	ThoughtNet* thoughtNet;
 	ValueNet* valueNet;

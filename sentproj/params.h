@@ -9,7 +9,7 @@
 
 #define MAX_WEIGHT_CHANGE 0.1f
 
-#define STEPFACTOR 1e-4f
+#define STEPFACTOR 1e-6f
 
 #define VALUE_DECAY_FACTOR 0.995
 

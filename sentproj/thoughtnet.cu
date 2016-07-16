@@ -1,4 +1,5 @@
 #include "thoughtnet.cuh"
+#include "thoughtkernel.cuh"
 
 ThoughtNet::ThoughtNet(size_t nInputs, size_t nOutputs, size_t nLayers, size_t nClusters) {
 	numInputs = nInputs;
@@ -165,10 +166,12 @@ void ThoughtNet::compute() {
 	for (size_t i = 0; i < thoughtCollection.numThoughtLayers; i++) {
 		ThoughtMatrices* tm = &thoughtCollection.thoughtMats[i];
 		ThoughtParameters* tp = &thoughtCollection.thoughtPars[i];
+		ThoughtMatrices* d_tm = thoughtCollection.d_thoughtMats[i];
+		ThoughtParameters* d_tp = thoughtCollection.d_thoughtPars[i];
 		dim3 nBlocks(tp->forNBlockX);
 		dim3 shape(tp->forBlockX);
 		size_t shared = tm->forwardSharedMem;
-		computeThoughtLayer<<<nBlocks, shape, shared>>>(tm, tp, turn1front);
+		computeThoughtLayer<<<nBlocks, shape, shared>>>(d_tm, d_tp, turn1front);
 		checkCudaErrors(cudaPeekAtLastError());
 	}
 }
@@ -179,10 +182,12 @@ void ThoughtNet::backPropagate() {
 	for (size_t i = 0; i < thoughtCollection.numThoughtLayers; i++) {
 		ThoughtMatrices* tm = &thoughtCollection.thoughtMats[i];
 		ThoughtParameters* tp = &thoughtCollection.thoughtPars[i];
+		ThoughtMatrices* d_tm = thoughtCollection.d_thoughtMats[i];
+		ThoughtParameters* d_tp = thoughtCollection.d_thoughtPars[i];
 		dim3 nBlocks(tp->backNBlockX);
 		dim3 shape(tp->backBlockX);
 		size_t shared = tm->backwardSharedMem;
-		backPropagateThoughtLayer<<<nBlocks, shape, shared>>>(tm, tp, turn1front);
+		backPropagateThoughtLayer<<<nBlocks, shape, shared>>>(d_tm, d_tp, turn1front);
 		checkCudaErrors(cudaPeekAtLastError());
 	}
 }
@@ -206,9 +211,42 @@ float* ThoughtNet::getDeviceOutputLayer() {
 }
 
 ThoughtMatrices* ThoughtNet::getLastLevelMatrices() {
-	return &thoughtCollection.thoughtMats[numLayers - 1];
+	return thoughtCollection.d_thoughtMats[numLayers - 1];
 }
 
 ThoughtParameters* ThoughtNet::getLastLevelParameters() {
-	return &thoughtCollection.thoughtPars[numLayers - 1];
+	return thoughtCollection.d_thoughtPars[numLayers - 1];
+}
+
+void ThoughtNet::copyOutputToHost(float* d_outputs) {
+	copyThoughtKernelOutputToHost << <1, numOutputs, 0 >> >(getLastLevelMatrices(), getLastLevelParameters(), d_outputs, turn1Front());
+}
+
+void ThoughtNet::saveWeights(std::string fname) {
+	std::ofstream outfile(fname.c_str());
+
+	for (size_t i = 0; i < numLayers; i++) {
+		ThoughtMatrices* tm = &thoughtCollection.thoughtMats[i];
+		ThoughtParameters* tp = &thoughtCollection.thoughtPars[i];
+		size_t totalCon = tp->backwardConnectivity + tp->sideConnectivity;
+
+		size_t numWeights = tp->numOutputs*totalCon;
+		size_t numThresholds = tp->numOutputs;
+		float* h_weights = new float[numWeights];
+		float* h_thresholds = new float[numThresholds];
+		checkCudaErrors(cudaMemcpy(h_weights, tm->weights, numWeights*sizeof(float), cudaMemcpyDeviceToHost));
+		checkCudaErrors(cudaMemcpy(h_thresholds, tm->thresholds, numThresholds*sizeof(float), cudaMemcpyDeviceToHost));
+
+		outfile << "Thought Layer " << i << ": " << std::endl;
+		for (size_t j = 0; j < numThresholds; j++) {
+			outfile << h_thresholds[j] << "| " << std::endl;
+			for (size_t k = 0; k < totalCon; k++) {
+				outfile << h_weights[k + j*totalCon] << " ";
+			}
+			outfile << std::endl << std::endl;
+		}
+
+		delete[] h_weights;
+		delete[] h_thresholds;
+	}
 }

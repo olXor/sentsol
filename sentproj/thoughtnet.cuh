@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
-#include "thoughtkernel.cuh"
 
 struct ThoughtMatrices {
 	float* inlayer1;
@@ -67,9 +66,12 @@ public:
 
 	void compute();
 	void backPropagate();
+	void copyOutputToHost(float* d_outputs);
 
 	ThoughtMatrices* getLastLevelMatrices();
 	ThoughtParameters* getLastLevelParameters();
+
+	void saveWeights(std::string fname);
 
 private:
 	size_t turn = 0;

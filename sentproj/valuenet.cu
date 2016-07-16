@@ -1,4 +1,5 @@
 #include "valuenet.cuh"
+#include "valuekernel.cuh"
 
 ValueNet::ValueNet(ThoughtNet* tn) {
 	numInputs = tn->getNumInputs();
@@ -28,6 +29,8 @@ ValueCollection ValueNet::createValueCollection(ThoughtNet* tn) {
 		ValueParameters* vp = &vc.valuePars[i];
 		if (i == 0)
 			vp->numInputs = numInputs;
+		else if (i == numLayers - 1)
+			vp->numInputs = numThoughtNetOutputs;
 		else
 			vp->numInputs = numClusters*CLUSTER_SIZE;
 
@@ -142,7 +145,7 @@ void instantiateValueMatrices(ValueMatrices* vm, ValueParameters* vp) {
 
 void linkValueLayers(ValueCollection* vc, ThoughtNet* tn) {
 	ThoughtCollection* tc = tn->getThoughtCollection();
-	if (vc->numValueLayers != tc->numThoughtLayers) {
+	if (vc->numValueLayers != tc->numThoughtLayers + 1) {
 		std::cout << "ValueNet and ThoughtNet have different numbers of layers!";
 		throw new std::runtime_error("ValueNet and ThoughtNet have different numbers of layers!");
 	}
@@ -157,13 +160,21 @@ void linkValueLayers(ValueCollection* vc, ThoughtNet* tn) {
 			vc->valueMats[i].inlayer = vc->valueMats[i - 1].outlayer;
 		}
 
-		if (vc->valuePars[i].numThoughtInputs != tc->thoughtPars[i].numOutputs) {
+		if (vc->valuePars[i].numThoughtInputs != 0 && vc->valuePars[i].numThoughtInputs != tc->thoughtPars[i].numOutputs) {
 			std::cout << "Failed to link value net to thought net!" << std::endl;
 			throw new std::runtime_error("Failed to link value net to thought net!");
 		}
 
-		vc->valueMats[i].thoughtlayer1 = tc->thoughtMats[i].outlayer1;
-		vc->valueMats[i].thoughtlayer2 = tc->thoughtMats[i].outlayer2;
+		if (vc->valuePars[i].numThoughtInputs != 0) {
+			vc->valueMats[i].thoughtlayer1 = tc->thoughtMats[i].outlayer1;
+			vc->valueMats[i].thoughtlayer2 = tc->thoughtMats[i].outlayer2;
+			vc->valueMats[i].thoughterrors = tc->thoughtMats[i].errors;
+		}
+		else {
+			vc->valueMats[i].thoughtlayer1 = NULL;
+			vc->valueMats[i].thoughtlayer2 = NULL;
+			vc->valueMats[i].thoughterrors = NULL;
+		}
 	}
 }
 
@@ -197,10 +208,12 @@ void ValueNet::compute() {
 	for (size_t i = 0; i < valueCollection.numValueLayers; i++) {
 		ValueMatrices* vm = &valueCollection.valueMats[i];
 		ValueParameters* vp = &valueCollection.valuePars[i];
+		ValueMatrices* d_vm = valueCollection.d_valueMats[i];
+		ValueParameters* d_vp = valueCollection.d_valuePars[i];
 		dim3 nBlocks(vp->forNBlockX);
 		dim3 shape(vp->forBlockX);
 		size_t shared = vm->forwardSharedMem;
-		computeValueLayer<<<nBlocks, shape, shared>>>(vm, vp, turn1front);
+		computeValueLayer<<<nBlocks, shape, shared>>>(d_vm, d_vp, turn1front);
 		checkCudaErrors(cudaPeekAtLastError());
 	}
 }
@@ -209,50 +222,58 @@ void ValueNet::backPropagate() {
 	bool turn1front = turn1Front();
 
 	size_t valueOutputLayer = valueCollection.numValueLayers - 1;
-	setErrorFactors<<<1,2,0>>>(&valueCollection.valueMats[valueOutputLayer], &valueCollection.valuePars[valueOutputLayer], posErrorFact, negErrorFact);
+	setErrorFactors<<<1,2,0>>>(valueCollection.d_valueMats[valueOutputLayer], valueCollection.d_valuePars[valueOutputLayer], posErrorFact, negErrorFact);
 	checkCudaErrors(cudaPeekAtLastError());
 
 	//we must propagate the first layer separately. Also must propagate in reverse order
 	for (size_t i = valueCollection.numValueLayers - 1; i > 0; i--) {
 		ValueMatrices* vm = &valueCollection.valueMats[i];
 		ValueParameters* vp = &valueCollection.valuePars[i];
+		ValueMatrices* d_vm = valueCollection.d_valueMats[i];
+		ValueParameters* d_vp = valueCollection.d_valuePars[i];
 		dim3 nBlocks(vp->backValueNBlockX);
 		dim3 shape(vp->backValueBlockX, vp->backValueBlockY);
 		size_t shared = vm->bpValueSharedMem;
-		backPropagateValueToValue << <nBlocks, shape, shared >> >(vm, vp, posErrorFact, negErrorFact);
+		backPropagateValueToValue << <nBlocks, shape, shared >> >(d_vm, d_vp, posErrorFact, negErrorFact);
 		checkCudaErrors(cudaPeekAtLastError());
 
-		dim3 thoughtNBlocks(vp->backThoughtNBlockX);
-		dim3 thoughtShape(vp->backThoughtBlockX, vp->backThoughtBlockY);
-		size_t thoughtShared = vm->bpThoughtSharedMem;
-		backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(vm, vp, turn1front, posErrorFact, negErrorFact);
-		checkCudaErrors(cudaPeekAtLastError());
+		if (vp->backThoughtNBlockX > 0) {
+			dim3 thoughtNBlocks(vp->backThoughtNBlockX);
+			dim3 thoughtShape(vp->backThoughtBlockX, vp->backThoughtBlockY);
+			size_t thoughtShared = vm->bpThoughtSharedMem;
+			backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(d_vm, d_vp, turn1front, posErrorFact, negErrorFact);
+			checkCudaErrors(cudaPeekAtLastError());
+		}
 	}
 
 	//now first layer
 	ValueMatrices* vm = &valueCollection.valueMats[0];
 	ValueParameters* vp = &valueCollection.valuePars[0];
+	ValueMatrices* d_vm = valueCollection.d_valueMats[0];
+	ValueParameters* d_vp = valueCollection.d_valuePars[0];
 	dim3 nBlocks(vp->backValueFirstNBlockX);
 	dim3 shape(vp->backValueFirstBlockX);
 	size_t shared = vm->bpValueFirstSharedMem;
-	backPropagateValueToValueFirstLayer << <nBlocks, shape, shared >> >(vm, vp, posErrorFact, negErrorFact);
+	backPropagateValueToValueFirstLayer << <nBlocks, shape, shared >> >(d_vm, d_vp, posErrorFact, negErrorFact);
 	checkCudaErrors(cudaPeekAtLastError());
 
 	dim3 thoughtNBlocks(vp->backThoughtNBlockX);
 	dim3 thoughtShape(vp->backThoughtBlockX, vp->backThoughtBlockY);
 	size_t thoughtShared = vm->bpThoughtSharedMem;
-	backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(vm, vp, turn1front, posErrorFact, negErrorFact);
+	backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(d_vm, d_vp, turn1front, posErrorFact, negErrorFact);
 	checkCudaErrors(cudaPeekAtLastError());
 }
 
 void ValueNet::updateWeights(float pleasurePain) {
 	for (size_t i = 0; i < valueCollection.numValueLayers; i++) {
-		ValueMatrices* vm = &valueCollection.valueMats[0];
-		ValueParameters* vp = &valueCollection.valuePars[0];
+		ValueMatrices* vm = &valueCollection.valueMats[i];
+		ValueParameters* vp = &valueCollection.valuePars[i];
+		ValueMatrices* d_vm = valueCollection.d_valueMats[i];
+		ValueParameters* d_vp = valueCollection.d_valuePars[i];
 		dim3 nBlocks(vp->updateNBlockX);
 		dim3 shape(vp->updateBlockX);
 		size_t shared = vm->updateSharedMem;
-		updateValueWeights << <nBlocks, shape, shared >> >(vm, vp, pleasurePain);
+		updateValueWeights << <nBlocks, shape, shared >> >(d_vm, d_vp, pleasurePain);
 		checkCudaErrors(cudaPeekAtLastError());
 	}
 }
@@ -271,9 +292,37 @@ ValueNet::~ValueNet() {
 		checkCudaErrors(cudaFree(vp.outTDs));
 		checkCudaErrors(cudaFree(vp.inerrors));
 		checkCudaErrors(cudaFree(vp.outerrors));
-		checkCudaErrors(cudaFree(vp.thoughterrors));
 
 		checkCudaErrors(cudaFree(valueCollection.d_valueMats[i]));
 		checkCudaErrors(cudaFree(valueCollection.d_valuePars[i]));
+	}
+}
+
+void ValueNet::saveWeights(std::string fname) {
+	std::ofstream outfile(fname.c_str());
+
+	for (size_t i = 0; i < numLayers; i++) {
+		ValueMatrices* tm = &valueCollection.valueMats[i];
+		ValueParameters* tp = &valueCollection.valuePars[i];
+		size_t totalCon = tp->backwardConnectivity + tp->thoughtConnectivity;
+
+		size_t numWeights = tp->numOutputs*totalCon;
+		size_t numThresholds = tp->numOutputs;
+		float* h_weights = new float[numWeights];
+		float* h_thresholds = new float[numThresholds];
+		checkCudaErrors(cudaMemcpy(h_weights, tm->weights, numWeights*sizeof(float), cudaMemcpyDeviceToHost));
+		checkCudaErrors(cudaMemcpy(h_thresholds, tm->thresholds, numThresholds*sizeof(float), cudaMemcpyDeviceToHost));
+
+		outfile << "Value Layer " << i << ": " << std::endl;
+		for (size_t j = 0; j < numThresholds; j++) {
+			outfile << h_thresholds[j] << "| " << std::endl;
+			for (size_t k = 0; k < totalCon; k++) {
+				outfile << h_weights[k + j*totalCon] << " ";
+			}
+			outfile << std::endl << std::endl;
+		}
+
+		delete[] h_weights;
+		delete[] h_thresholds;
 	}
 }

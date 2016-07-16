@@ -16,6 +16,31 @@ __host__ __device__ float thoughtTransferDerivative(float in) {
 	return 1.0f / (1.0f + exp(-in / TRANSFER_WIDTH)) + NEGATIVE_TRANSFER_FACTOR / (1.0f + exp(in / TRANSFER_WIDTH));
 }
 
+#ifdef MAX_WEIGHT_CHANGE
+__device__ float thoughtBoundChange(float change) {
+	if (change > MAX_WEIGHT_CHANGE)
+		change = MAX_WEIGHT_CHANGE;
+	else if (change < -MAX_WEIGHT_CHANGE)
+		change = -MAX_WEIGHT_CHANGE;
+	return change;
+}
+#endif
+
+__device__ bool thoughtIsNan(float num) {
+	return !isfinite(num);
+}
+
+__device__ void thoughtSumVector(float* vec, size_t size, size_t threadNum, size_t numThreads) {
+	size_t stride = 1;
+	while (stride < size) {
+		for (size_t j = 2 * stride*threadNum; j + stride < size; j += 2 * stride*numThreads) {
+			vec[j] += vec[j + stride];
+		}
+		stride *= 2;
+		__syncthreads();
+	}
+}
+
 __global__ void computeThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, bool turn1front) {
 	size_t outNeuron = blockIdx.x;
 	size_t clusterStart = outNeuron - outNeuron%CLUSTER_SIZE;
@@ -55,7 +80,7 @@ __global__ void computeThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, 
 
 	__syncthreads();
 
-	sumVector(outputs, totalCon, inConnection, numInThreads);
+	thoughtSumVector(outputs, totalCon, inConnection, numInThreads);
 
 	if (threadIdx.x == 0) {
 		outlayer[outNeuron] = thoughtTransferFunction(outputs[0] - tm->thresholds[outNeuron]);
@@ -66,7 +91,10 @@ __global__ void computeThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, 
 }
 
 size_t getThoughtComputeSharedSize(ThoughtParameters* tp) {
-	return tp->backwardConnectivity + tp->sideConnectivity;
+	size_t size = 0;
+	size += tp->backwardConnectivity + tp->sideConnectivity;
+	size *= sizeof(float);
+	return size;
 }
 
 __global__ void backPropagateThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, bool turn1front) {
@@ -97,7 +125,7 @@ __global__ void backPropagateThoughtLayer(ThoughtMatrices* tm, ThoughtParameters
 	float outErrorTD = tm->errors[outNeuron] * tm->outTDs[outNeuron];
 	if (inConnection == 0) {
 #ifdef MAX_WEIGHT_CHANGE
-		float change = boundChange(outErrorTD);
+		float change = thoughtBoundChange(outErrorTD);
 #else
 		float change = outErrorTD;
 #endif
@@ -111,7 +139,7 @@ __global__ void backPropagateThoughtLayer(ThoughtMatrices* tm, ThoughtParameters
 		else
 			change = outErrorTD * prevoutlayer[(clusterStart + i - backCon) % numOutputs];
 #ifdef MAX_WEIGHT_CHANGE
-		change = boundChange(change);
+		change = thoughtBoundChange(change);
 #endif
 		tm->weights[i + totalCon*outNeuron] -= change;
 	}
@@ -121,13 +149,12 @@ size_t getThoughtBackPropSharedSize(ThoughtParameters* tp) {
 	return 0;
 }
 
-__global__ void copyOutputToHost(ThoughtMatrices* tm, ThoughtParameters* tp, float* hostoutput, bool turn1front) {
-	if (threadIdx.x == 0) {
-		float* currentoutput;
-		if (turn1front)
-			currentoutput = tm->outlayer1;
-		else
-			currentoutput = tm->outlayer2;
-		hostoutput[0] = currentoutput[0];
-	}
+__global__ void copyThoughtKernelOutputToHost(ThoughtMatrices* tm, ThoughtParameters* tp, float* hostoutput, bool turn1front) {
+	size_t outNeuron = threadIdx.x;
+	float* currentoutput;
+	if (turn1front)
+		currentoutput = tm->outlayer1;
+	else
+		currentoutput = tm->outlayer2;
+	hostoutput[outNeuron] = currentoutput[outNeuron];
 }
