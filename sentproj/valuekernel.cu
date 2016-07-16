@@ -123,7 +123,7 @@ __global__ void backPropagateValueToValue(ValueMatrices* vm, ValueParameters* vp
 			size_t errorIndex = i*numClusterPositions + j;
 			size_t conNum = (numInputs + inNeuron - outClusterStart) % numInputs;
 			size_t weightPos = conNum + outNeuron*totalCon;
-			if (outNeuron > numOutputs || conNum > backCon)
+			if (outNeuron > numOutputs || conNum >= backCon)
 				errors[errorIndex] = 0;
 			else {
 				float outErrorTD = vm->outerrors[outNeuron] * vm->outTDs[outNeuron];
@@ -242,7 +242,7 @@ __global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* 
 			size_t errorIndex = i*numClusterPositions + j;
 			size_t conNum = (numThoughts + thoughtNeuron - outClusterStart) % numThoughts;
 			size_t weightPos = backCon + conNum + outNeuron*totalCon;
-			if (outNeuron > numOutputs || conNum > totalCon || conNum <= backCon)
+			if (outNeuron > numOutputs || conNum + backCon >= totalCon)
 				errors[errorIndex] = 0;
 			else {
 				float outErrorTD = vm->outerrors[outNeuron] * vm->outTDs[outNeuron];
@@ -286,7 +286,13 @@ __global__ void updateValueWeights(ValueMatrices* vm, ValueParameters* vp, float
 	size_t thoughtCon = vp->thoughtConnectivity;
 	size_t totalCon = backCon + thoughtCon;
 
-	for (size_t i = inConnection; i < totalCon; i += numInThreads) {
+	for (size_t i = inConnection; i < totalCon + 1; i += numInThreads) {
+		if (i == totalCon) {
+			if (pleasurePain > 0)
+				vm->thresholds[outNeuron] += pleasurePain*vm->posThresholdChanges[outNeuron];
+			else
+				vm->thresholds[outNeuron] -= pleasurePain*vm->negThresholdChanges[outNeuron];
+		}
 		size_t weightNum = i + outNeuron*totalCon;
 		if (pleasurePain > 0)
 			vm->weights[weightNum] += pleasurePain*vm->posWeightChanges[weightNum];
