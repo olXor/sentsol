@@ -19,7 +19,6 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="commonkernel.cu" />
     <CudaCompile Include="maze.cu" />
     <CudaCompile Include="sentbot.cu" />
     <CudaCompile Include="sentproj.cu" />
@@ -29,7 +28,6 @@
     <CudaCompile Include="valuenet.cu" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="commonkernel.cuh" />
     <ClInclude Include="params.h" />
     <ClInclude Include="sentbot.cuh" />
     <ClInclude Include="thoughtkernel.cuh" />

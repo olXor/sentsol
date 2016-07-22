@@ -4,6 +4,7 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include <helper_cuda.h>
+#include <curand_kernel.h>
 #include <vector>
 #include "params.h"
 #include <algorithm>
@@ -20,6 +21,8 @@ struct ThoughtMatrices {
 	float* thresholds;
 	float* outTDs;
 	float* errors;
+
+	curandState* randStates;
 
 	size_t forwardSharedMem;
 	size_t backwardSharedMem;
@@ -67,11 +70,15 @@ public:
 	void compute();
 	void backPropagate();
 	void copyOutputToHost(float* d_outputs);
+	void resetThoughts();
 
 	ThoughtMatrices* getLastLevelMatrices();
 	ThoughtParameters* getLastLevelParameters();
 
 	void saveWeights(std::string fname);
+	void loadWeights(std::string fname);
+
+	void setValueResultPointer(float* vr);
 
 private:
 	size_t turn = 0;
@@ -81,11 +88,14 @@ private:
 	size_t numLayers;
 	size_t numClusters;
 
+	float* valueResult;	//one element, on device
+
 	ThoughtCollection createThoughtCollection();
 };
 
 void instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp);
 void linkThoughtLayers(ThoughtCollection* tc);
 void copyThoughtLayersToDevice(ThoughtCollection* tc);
+void initializeRandomStates(ThoughtCollection* tc);
 
 #endif

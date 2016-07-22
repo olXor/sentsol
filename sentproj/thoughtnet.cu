@@ -45,6 +45,8 @@ ThoughtCollection ThoughtNet::createThoughtCollection() {
 	linkThoughtLayers(&tc);
 	copyThoughtLayersToDevice(&tc);
 
+	initializeRandomStates(&tc);
+
 	return tc;
 }
 
@@ -83,6 +85,8 @@ void instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp) {
 
 	tm->forwardSharedMem = getThoughtComputeSharedSize(tp);
 	tm->backwardSharedMem = getThoughtBackPropSharedSize(tp);
+
+	checkCudaErrors(cudaMalloc(&tm->randStates, tp->numOutputs*sizeof(curandState)));
 }
 
 void linkThoughtLayers(ThoughtCollection* tc) {
@@ -117,6 +121,20 @@ void copyThoughtLayersToDevice(ThoughtCollection* tc) {
 		checkCudaErrors(cudaMalloc(&d_thoughtPar, sizeof(ThoughtParameters)));
 		checkCudaErrors(cudaMemcpy(d_thoughtPar, &tc->thoughtPars[i], sizeof(ThoughtParameters), cudaMemcpyHostToDevice));
 		tc->d_thoughtPars.push_back(d_thoughtPar);
+	}
+}
+
+void initializeRandomStates(ThoughtCollection* tc) {
+	size_t seed = rand();
+	size_t sequenceStart = 0;
+	for (size_t i = 0; i < tc->numThoughtLayers; i++) {
+		ThoughtMatrices* tm = &tc->thoughtMats[i];
+		ThoughtParameters* tp = &tc->thoughtPars[i];
+		ThoughtMatrices* d_tm = tc->d_thoughtMats[i];
+		ThoughtParameters* d_tp = tc->d_thoughtPars[i];
+		initRandomStates << <1, tp->numOutputs >> >(d_tm, d_tp, seed, sequenceStart);
+		checkCudaErrors(cudaPeekAtLastError());
+		sequenceStart += tp->numOutputs;
 	}
 }
 
@@ -187,7 +205,20 @@ void ThoughtNet::backPropagate() {
 		dim3 nBlocks(tp->backNBlockX);
 		dim3 shape(tp->backBlockX);
 		size_t shared = tm->backwardSharedMem;
-		backPropagateThoughtLayer<<<nBlocks, shape, shared>>>(d_tm, d_tp, turn1front);
+		backPropagateThoughtLayer<<<nBlocks, shape, shared>>>(d_tm, d_tp, turn1front, valueResult);
+		checkCudaErrors(cudaPeekAtLastError());
+	}
+}
+
+void ThoughtNet::resetThoughts() {
+	for (size_t i = 0; i < thoughtCollection.numThoughtLayers; i++) {
+		ThoughtMatrices* tm = &thoughtCollection.thoughtMats[i];
+		ThoughtParameters* tp = &thoughtCollection.thoughtPars[i];
+		ThoughtMatrices* d_tm = thoughtCollection.d_thoughtMats[i];
+		ThoughtParameters* d_tp = thoughtCollection.d_thoughtPars[i];
+		dim3 nBlocks(2);
+		dim3 shape(tp->numOutputs);
+		kernelResetThoughts << <nBlocks, shape >> >(d_tm, d_tp);
 		checkCudaErrors(cudaPeekAtLastError());
 	}
 }
@@ -249,4 +280,41 @@ void ThoughtNet::saveWeights(std::string fname) {
 		delete[] h_weights;
 		delete[] h_thresholds;
 	}
+}
+
+void ThoughtNet::loadWeights(std::string fname) {
+	std::ifstream infile(fname.c_str());
+
+	if (!infile.is_open()) {
+		return;
+	}
+
+	for (size_t i = 0; i < numLayers; i++) {
+		ThoughtMatrices* tm = &thoughtCollection.thoughtMats[i];
+		ThoughtParameters* tp = &thoughtCollection.thoughtPars[i];
+		size_t totalCon = tp->backwardConnectivity + tp->sideConnectivity;
+
+		size_t numWeights = tp->numOutputs*totalCon;
+		size_t numThresholds = tp->numOutputs;
+		float* h_weights = new float[numWeights];
+		float* h_thresholds = new float[numThresholds];
+
+		std::string dum;
+		infile >> dum >> dum >> dum; //Thought Layer #:
+		for (size_t j = 0; j < numThresholds; j++) {
+			infile >> h_thresholds[j] >> dum;
+			for (size_t k = 0; k < totalCon; k++) {
+				infile >> h_weights[k + j*totalCon];
+			}
+		}
+		checkCudaErrors(cudaMemcpy(tm->weights, h_weights, numWeights*sizeof(float), cudaMemcpyHostToDevice));
+		checkCudaErrors(cudaMemcpy(tm->thresholds, h_thresholds, numThresholds*sizeof(float), cudaMemcpyHostToDevice));
+
+		delete[] h_weights;
+		delete[] h_thresholds;
+	}
+}
+
+void ThoughtNet::setValueResultPointer(float* vr) {
+	valueResult = vr;
 }

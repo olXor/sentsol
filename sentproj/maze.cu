@@ -30,8 +30,9 @@ public:
 	Maze(size_t h, size_t w);
 	void displayMaze(WINDOW* win);
 	void writeActorInputs(float* inputs);	//length 4 array
-	void moveActor(float* outputs);			//length 4 array
+	void moveActor(WINDOW* win, float* outputs);			//length 4 array
 	bool actorOnGoal();
+	size_t Maze::getWallHugLength(bool hugLeft);
 
 private:
 	Room* getRoom(Position p);
@@ -48,7 +49,8 @@ private:
 	Position goalPosition;
 };
 
-void printOutputs(WINDOW* win, float* outputs, size_t numOutputs, size_t turn);
+void printOutputs(WINDOW* win, float* outputs, size_t numOutputs, size_t turn, size_t leftlength, size_t rightlength, size_t mazesSolved, size_t mazesFailed, float mazeaverage);
+bool positionsSame(Position p1, Position p2);
 
 int main() {
 	srand((unsigned int)time(NULL));
@@ -68,30 +70,70 @@ int main() {
 	mazewin = newwin(80, 160, 0, 0);
 	textwin = newwin(80, 40, 0, 160);
 
+	size_t mazesize = 2;
+	size_t mazesSolved = 0;
+	size_t mazesFailed = 0;
 	SentBot* bot = new SentBot(4, 4, 4, 4);
+	size_t turn = 0;
+	float mazeaverage = 0;
+#define NUM_MAZE_AVERAGE_RESULTS 100
+	size_t mazeres[NUM_MAZE_AVERAGE_RESULTS] = { 0 };
+	size_t mazerespos = 0;
+	float excessPain = 0.0f;
+	size_t numWinsInRow = 0;
+	std::ofstream avghistory("mazehistory");
 	while (true) {
-		Maze* maze = new Maze(30, 60);
+		Maze* maze = new Maze(mazesize, 2*mazesize);
+		size_t leftlength = maze->getWallHugLength(true);
+		size_t rightlength = maze->getWallHugLength(false);
+		size_t largelength = std::max(leftlength, rightlength);
 		maze->displayMaze(mazewin);
-		refresh();
 
 		size_t turnsWandering = 0;
 		while (true) {
 			turnsWandering++;
-			if (turnsWandering % 1000 == 0) {
-				printOutputs(textwin, bot->h_outputs, 4, turnsWandering);
-				bot->saveWeights("maze");
+			turn++;
+			for (size_t i = 0; i < 20; i++) {
+				maze->writeActorInputs(bot->h_inputs);
+				bot->takeTurn();
 			}
-			maze->writeActorInputs(bot->h_inputs);
-			bot->takeTurn();
-			maze->moveActor(bot->h_outputs);
+			maze->moveActor(mazewin, bot->h_outputs);
 			if (maze->actorOnGoal()) {
-				bot->givePleasurePain(1);
+				float extraPleasure = 0.0;
+				numWinsInRow++;
+				if (excessPain > 0.0f) {
+					extraPleasure = std::min(excessPain, numWinsInRow*1.0f);
+				}
+				excessPain -= extraPleasure + 1.0f;
+				bot->givePleasurePain(1.0f + extraPleasure);
+				mazesSolved++;
+				if (mazesize < 30)
+					mazesize++;
 				break;
 			}
-			else if (turnsWandering % 10000 == 0) {
-				bot->givePleasurePain(-1);
+			else if (turnsWandering >= 10 * largelength) {
+				numWinsInRow = 0;
+				excessPain += 1.0f;
+				bot->givePleasurePain(-1.0f);
+				mazesFailed++;
+				if (mazesize > 2)
+					mazesize--;
+				break;
 			}
 		}
+		bot->resetThoughts();
+		mazeres[mazerespos] = mazesize;
+		mazerespos = (mazerespos + 1) % NUM_MAZE_AVERAGE_RESULTS;
+		mazeaverage = 0;
+		for (size_t i = 0; i < NUM_MAZE_AVERAGE_RESULTS; i++) {
+			mazeaverage += mazeres[i];
+		}
+		mazeaverage /= NUM_MAZE_AVERAGE_RESULTS;
+		printOutputs(textwin, bot->h_outputs, 4, turnsWandering, leftlength, rightlength, mazesSolved, mazesFailed, mazeaverage);
+		bot->saveWeights("maze");
+		avghistory << mazeaverage << std::endl;
+
+		delete maze;
 	}
 }
 
@@ -248,6 +290,7 @@ void Maze::chiselMaze() {
 }
 
 void Maze::displayMaze(WINDOW* win) {
+	werase(win);
 	int intHeight = (int)height;
 	int intWidth = (int)width;
 	for (int h = 0; h < intHeight; h++) {
@@ -257,26 +300,28 @@ void Maze::displayMaze(WINDOW* win) {
 			p.y = h;
 			Room* r = getRoom(p);
 
-			mvaddch(2 * h + 2, 2 * w, '#');
-			mvaddch(2 * h + 1, 2 * w + 1, ' ');
+			mvwaddch(win, 2 * h + 2, 2 * w, '#');
+			mvwaddch(win, 2 * h + 1, 2 * w + 1, ' ');
 			if (r->northWall)
-				mvaddch(2 * h + 2, 2 * w + 1, '#');
+				mvwaddch(win, 2 * h + 2, 2 * w + 1, '#');
 			else
-				mvaddch(2 * h + 2, 2 * w + 1, ' ');
+				mvwaddch(win, 2 * h + 2, 2 * w + 1, ' ');
 			if (r->westWall)
-				mvaddch(2 * h + 1, 2 * w, '#');
+				mvwaddch(win, 2 * h + 1, 2 * w, '#');
 			else
-				mvaddch(2 * h + 1, 2 * w, ' ');
+				mvwaddch(win, 2 * h + 1, 2 * w, ' ');
 		}
 	}
 	for (int i = 0; i < 2 * intWidth; i++) {
-		mvaddch(0, i, '#');
+		mvwaddch(win, 0, i, '#');
 	}
 	for (int i = 0; i < 2 * intHeight + 1; i++) {
-		mvaddch(i, 2 * intWidth, '#');
+		mvwaddch(win, i, 2 * intWidth, '#');
 	}
-	mvaddch(2 * intHeight - 1, 2 * intWidth - 1, '!');
-	mvaddch(2 * actorPosition.y + 1, 2 * actorPosition.x + 1, '@');
+	mvwaddch(win, 2 * intHeight - 1, 2 * intWidth - 1, '!');
+	mvwaddch(win, 2 * actorPosition.y + 1, 2 * actorPosition.x + 1, '@');
+
+	wrefresh(win);
 }
 
 void Maze::writeActorInputs(float* inputs) {
@@ -302,7 +347,7 @@ void Maze::writeActorInputs(float* inputs) {
 		inputs[3] = -1.0f;
 }
 
-void Maze::moveActor(float* outputs) {
+void Maze::moveActor(WINDOW* win, float* outputs) {
 	int dir = NONE;
 	float maxout = -9999;
 	for (size_t i = 0; i < 4; i++) {
@@ -311,31 +356,100 @@ void Maze::moveActor(float* outputs) {
 			maxout = outputs[i];
 		}
 	}
-	if (maxout > 1.0f && directionOpen(actorPosition, dir)) {
-		mvaddch((int)(2 * actorPosition.y + 1), (int)(2 * actorPosition.x + 1), ' ');
+	if (directionOpen(actorPosition, dir)) {
+		mvwaddch(win, (int)(2 * actorPosition.y + 1), (int)(2 * actorPosition.x + 1), ' ');
 		actorPosition = getAdjacentPosition(actorPosition, dir);
-		mvaddch((int)(2 * actorPosition.y + 1), (int)(2 * actorPosition.x + 1), '@');
+		mvwaddch(win, (int)(2 * actorPosition.y + 1), (int)(2 * actorPosition.x + 1), '@');
+
+		wrefresh(win);
 	}
 }
 
 bool Maze::actorOnGoal() {
-	return actorPosition.x == goalPosition.x && actorPosition.y == goalPosition.y;
+	return positionsSame(actorPosition, goalPosition);
 }
 
-void printOutputs(WINDOW* win, float* outputs, size_t numOutputs, size_t turn) {
-	int startx;
-	int starty;
-	getbegyx(win, starty, startx);
+bool positionsSame(Position p1, Position p2) {
+	return p1.x == p2.x && p1.y == p2.y;
+}
+
+void printOutputs(WINDOW* win, float* outputs, size_t numOutputs, size_t turn, size_t leftlength, size_t rightlength, size_t mazesSolved, size_t mazesFailed, float mazeaverage) {
 	std::stringstream ss;
 	ss << turn;
-	mvprintw(starty, startx, ss.str().c_str());
+	mvwprintw(win, 0, 0, ss.str().c_str());
 
 	for (size_t i = 0; i < 4; i++) {
 		ss.clear();
 		ss.str("");
 		ss << outputs[i];
 
-		mvprintw(starty + i + 1, startx, ss.str().c_str());
+		mvwprintw(win, i + 1, 0, ss.str().c_str());
 	}
-	refresh();
+
+	std::stringstream lss;
+	lss << "L: " << leftlength;
+	mvwprintw(win, 7, 0, lss.str().c_str());
+
+	lss.clear();
+	lss.str("");
+	lss << "R: " << rightlength;
+	mvwprintw(win, 7, 5, lss.str().c_str());
+
+	lss.clear();
+	lss.str("");
+	lss << "Mazes Solved: " << mazesSolved;
+	mvwprintw(win, 9, 0, lss.str().c_str());
+
+	lss.clear();
+	lss.str("");
+	lss << "Mazes Failed: " << mazesFailed;
+	mvwprintw(win, 10, 0, lss.str().c_str());
+
+	lss.clear();
+	lss.str("");
+	lss << "Maze Level Average: " << mazeaverage;
+	mvwprintw(win, 11, 0, lss.str().c_str());
+
+	wrefresh(win);
+}
+
+int turnDir(int dir, bool left) {
+	if (left) {
+		if (dir == NORTH)
+			return WEST;
+		else if (dir == WEST)
+			return SOUTH;
+		else if (dir == SOUTH)
+			return EAST;
+		else if (dir == EAST)
+			return NORTH;
+	}
+	else {
+		if (dir == NORTH)
+			return EAST;
+		else if (dir == EAST)
+			return SOUTH;
+		else if (dir == SOUTH)
+			return WEST;
+		else if (dir == WEST)
+			return NORTH;
+	}
+	return NONE;
+}
+
+size_t Maze::getWallHugLength(bool hugLeft) {
+	Position p;
+	p.x = 0;
+	p.y = 0;
+	size_t length = 0;
+	int dir = NORTH;
+	while (!positionsSame(p, goalPosition)) {
+		dir = turnDir(dir, hugLeft);
+		while (!directionOpen(p, dir)) {
+			dir = turnDir(dir, !hugLeft);
+		}
+		p = getAdjacentPosition(p, dir);
+		length++;
+	}
+	return length;
 }

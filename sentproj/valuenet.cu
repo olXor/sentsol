@@ -65,7 +65,7 @@ ValueCollection ValueNet::createValueCollection(ThoughtNet* tn) {
 		vp->backThoughtBlockY = (vp->thoughtConnectivity % CLUSTER_SIZE == 0 ? vp->thoughtConnectivity / CLUSTER_SIZE : vp->thoughtConnectivity / CLUSTER_SIZE + 1);
 
 		vp->updateNBlockX = vp->numOutputs;
-		vp->updateBlockX = vp->backwardConnectivity + vp->thoughtConnectivity;
+		vp->updateBlockX = vp->backwardConnectivity + vp->thoughtConnectivity + 1;
 		//-----------------
 
 		instantiateValueMatrices(&vc.valueMats[i], &vc.valuePars[i]);
@@ -176,6 +176,9 @@ void linkValueLayers(ValueCollection* vc, ThoughtNet* tn) {
 			vc->valueMats[i].thoughterrors = NULL;
 		}
 	}
+
+	//so the thought net can access the value result:
+	tn->setValueResultPointer(vc->valueMats[vc->numValueLayers - 1].outlayer);
 }
 
 void copyValueLayersToDevice(ValueCollection* vc) {
@@ -205,7 +208,7 @@ bool ValueNet::turn1Front() {
 //need layers in correct order for this net
 void ValueNet::compute() {
 	bool turn1front = turn1Front();
-	for (size_t i = 0; i < valueCollection.numValueLayers; i++) {
+	for (size_t i = 0; i < valueCollection.numValueLayers - 1; i++) {
 		ValueMatrices* vm = &valueCollection.valueMats[i];
 		ValueParameters* vp = &valueCollection.valuePars[i];
 		ValueMatrices* d_vm = valueCollection.d_valueMats[i];
@@ -216,6 +219,16 @@ void ValueNet::compute() {
 		computeValueLayer<<<nBlocks, shape, shared>>>(d_vm, d_vp, turn1front);
 		checkCudaErrors(cudaPeekAtLastError());
 	}
+	size_t lastLayer = valueCollection.numValueLayers - 1;
+	ValueMatrices* vm = &valueCollection.valueMats[lastLayer];
+	ValueParameters* vp = &valueCollection.valuePars[lastLayer];
+	ValueMatrices* d_vm = valueCollection.d_valueMats[lastLayer];
+	ValueParameters* d_vp = valueCollection.d_valuePars[lastLayer];
+	dim3 nBlocks(vp->forNBlockX);
+	dim3 shape(vp->forBlockX);
+	size_t shared = vm->forwardSharedMem;
+	computeValueLayerLast << <nBlocks, shape, shared >> >(d_vm, d_vp, turn1front);
+	checkCudaErrors(cudaPeekAtLastError());
 }
 
 void ValueNet::backPropagate() {
@@ -322,6 +335,39 @@ void ValueNet::saveWeights(std::string fname) {
 			outfile << std::endl << std::endl;
 		}
 
+		delete[] h_weights;
+		delete[] h_thresholds;
+	}
+}
+
+void ValueNet::loadWeights(std::string fname) {
+	std::ifstream infile(fname.c_str());
+
+	if (!infile.is_open()) {
+		return;
+	}
+
+	for (size_t i = 0; i < numLayers; i++) {
+		ValueMatrices* tm = &valueCollection.valueMats[i];
+		ValueParameters* tp = &valueCollection.valuePars[i];
+		size_t totalCon = tp->backwardConnectivity + tp->thoughtConnectivity;
+
+		size_t numWeights = tp->numOutputs*totalCon;
+		size_t numThresholds = tp->numOutputs;
+		float* h_weights = new float[numWeights];
+		float* h_thresholds = new float[numThresholds];
+
+		std::string dum;
+		infile >> dum >> dum >> dum;	//Value Layer #:
+		for (size_t j = 0; j < numThresholds; j++) {
+			infile >> h_thresholds[j] >> dum;
+			for (size_t k = 0; k < totalCon; k++) {
+				infile >> h_weights[k + j*totalCon];
+			}
+		}
+
+		checkCudaErrors(cudaMemcpy(tm->weights, h_weights, numWeights*sizeof(float), cudaMemcpyHostToDevice));
+		checkCudaErrors(cudaMemcpy(tm->thresholds, h_thresholds, numThresholds*sizeof(float), cudaMemcpyHostToDevice));
 		delete[] h_weights;
 		delete[] h_thresholds;
 	}

@@ -9,6 +9,7 @@ SentBot::SentBot(size_t nInputs, size_t nOutputs, size_t nLayers, size_t nCluste
 	h_inputs = new float[numInputs];
 	checkCudaErrors(cudaHostAlloc(&h_outputs, numOutputs*sizeof(float), cudaHostAllocMapped));
 	checkCudaErrors(cudaHostGetDevicePointer(&d_outputs, h_outputs, 0));
+	checkCudaErrors(cudaEventCreate(&calcDone));
 }
 
 SentBot::~SentBot() {
@@ -24,9 +25,6 @@ void SentBot::takeTurn() {
 	float* d_inputs = thoughtNet->getDeviceInputLayer();
 	//use the below if we're not using mapped memory for the output
 	//float* d_outputs = thoughtNet->getDeviceOutputLayer();
-
-	cudaEvent_t calcDone;
-	checkCudaErrors(cudaEventCreate(&calcDone));
 
 	checkCudaErrors(cudaMemcpyAsync(d_inputs, h_inputs, thoughtNet->getNumInputs()*sizeof(float), cudaMemcpyHostToDevice));
 
@@ -61,4 +59,21 @@ void SentBot::saveWeights(std::string fname) {
 	std::stringstream vss;
 	vss << base.str() << "value";
 	valueNet->saveWeights(vss.str());
+}
+
+void SentBot::loadWeights(std::string fname) {
+	std::stringstream base;
+	base << "saveweights/" << fname;
+
+	std::stringstream tss;
+	tss << base.str() << "thought";
+	thoughtNet->loadWeights(tss.str());
+
+	std::stringstream vss;
+	vss << base.str() << "value";
+	valueNet->loadWeights(vss.str());
+}
+
+void SentBot::resetThoughts() {
+	thoughtNet->resetThoughts();
 }

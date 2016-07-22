@@ -7,7 +7,6 @@
 #include "params.h"
 
 #include "valuenet.cuh"
-#include "commonkernel.cuh"
 
 //forward declarations
 struct ValueMatrices;
@@ -17,6 +16,7 @@ __host__ __device__ float valueTransferFunction(float in);
 __host__ __device__ float valueTransferDerivative(float in);
 
 __global__ void computeValueLayer(ValueMatrices* vm, ValueParameters* vp, bool turn1front);
+__global__ void computeValueLayerLast(ValueMatrices* vm, ValueParameters* vp, bool turn1front);
 __global__ void backPropagateValueToValue(ValueMatrices* vm, ValueParameters* vp, float* posErrorFact, float* negErrorFact);
 __global__ void backPropagateValueToValueFirstLayer(ValueMatrices* vm, ValueParameters* vp, float* posErrorFact, float* negErrorFact);
 __global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* vp, bool turn1front, float* posErrorFact, float* negErrorFact);

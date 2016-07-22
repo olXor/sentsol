@@ -13,8 +13,10 @@ public:
 
 	void takeTurn();
 	void givePleasurePain(float pleasurePain);
+	void resetThoughts();
 
 	void saveWeights(std::string fname);
+	void SentBot::loadWeights(std::string fname);
 
 private:
 	ThoughtNet* thoughtNet;
@@ -22,6 +24,7 @@ private:
 	size_t numInputs;
 	size_t numOutputs;
 	float* d_outputs;
+	cudaEvent_t calcDone;
 };
 
 #endif

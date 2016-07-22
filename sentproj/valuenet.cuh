@@ -86,6 +86,7 @@ public:
 	void updateWeights(float pleasurePain);
 
 	void saveWeights(std::string fname);
+	void ValueNet::loadWeights(std::string fname);
 
 private:
 	size_t turn = 0;
