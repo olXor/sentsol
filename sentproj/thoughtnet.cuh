@@ -12,15 +12,15 @@
 #include <stdexcept>
 
 struct ThoughtMatrices {
-	float* inlayer1;
-	float* inlayer2;
-	float* outlayer1;
-	float* outlayer2;
+	float* inlayer;	//THOUGHT_BP_DEPTH*numInputs
+	float* outlayer;
+	float* outTDs;
 
 	float* weights;
 	float* thresholds;
-	float* outTDs;
+
 	float* errors;
+	float* inerrors;
 
 	curandState* randStates;
 
@@ -57,20 +57,19 @@ public:
 	~ThoughtNet();
 	ThoughtCollection* getThoughtCollection();
 	void incrementTurn();
-	bool turn1Front();
 
 	size_t getNumInputs();
 	size_t getNumOutputs();
 	size_t getNumLayers();
 	size_t getNumClusters();
-
-	float* getDeviceInputLayer();
-	float* getDeviceOutputLayer();
+	size_t getBPTurn();
 
 	void compute();
 	void backPropagate();
 	void copyOutputToHost(float* d_outputs);
 	void resetThoughts();
+
+	float* getDeviceInputLayer();
 
 	ThoughtMatrices* getLastLevelMatrices();
 	ThoughtParameters* getLastLevelParameters();
@@ -81,7 +80,8 @@ public:
 	void setValueResultPointer(float* vr);
 
 private:
-	size_t turn = 0;
+	size_t bpTurn = 0;
+	size_t prevTurn = 0;		//only used for compute when the arrays wrap around
 	ThoughtCollection thoughtCollection;
 	size_t numInputs;
 	size_t numOutputs;

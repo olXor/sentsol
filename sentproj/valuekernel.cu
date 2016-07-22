@@ -59,7 +59,7 @@ __device__ void valueSumVector(float* vec, size_t size, size_t threadNum, size_t
 	}
 }
 
-__global__ void computeValueLayer(ValueMatrices* vm, ValueParameters* vp, bool turn1front) {
+__global__ void computeValueLayer(ValueMatrices* vm, ValueParameters* vp, size_t bpTurn) {
 	size_t outNeuron = blockIdx.x;
 	size_t clusterStart = outNeuron - outNeuron%CLUSTER_SIZE;
 	size_t inConnection = threadIdx.x;
@@ -72,15 +72,8 @@ __global__ void computeValueLayer(ValueMatrices* vm, ValueParameters* vp, bool t
 	size_t numInputs = vp->numInputs;
 	size_t numThoughtInputs = vp->numThoughtInputs;
 
-	float* thoughtlayer;
+	float* thoughtlayer = &vm->thoughtlayer[bpTurn*numThoughtInputs];
 	
-	if (turn1front) {
-		thoughtlayer = vm->thoughtlayer1;
-	}
-	else {
-		thoughtlayer = vm->thoughtlayer2;
-	}
-
 	extern __shared__ float outputs[];		//totalCon
 
 	for (size_t i = inConnection; i < totalCon; i += numInThreads) {
@@ -109,7 +102,7 @@ size_t getValueComputeSharedSize(ValueParameters* vp) {
 	return size;
 }
 
-__global__ void computeValueLayerLast(ValueMatrices* vm, ValueParameters* vp, bool turn1front) {
+__global__ void computeValueLayerLast(ValueMatrices* vm, ValueParameters* vp) {
 	size_t outNeuron = blockIdx.x;
 	size_t clusterStart = outNeuron - outNeuron%CLUSTER_SIZE;
 	size_t inConnection = threadIdx.x;
@@ -249,7 +242,7 @@ size_t getValueBackPropValueToValueFirstLayerSharedSize(ValueParameters* vp) {
 }
 
 //assumes numThoughts >= numOutputs
-__global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* vp, bool turn1front, float* posErrorFact, float* negErrorFact) {
+__global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* vp, size_t bpTurn, float* posErrorFact, float* negErrorFact) {
 	size_t thoughtNeuron = blockIdx.x;
 	size_t thoughtClusterStart = thoughtNeuron - thoughtNeuron%CLUSTER_SIZE;
 	size_t outNeuronPosInCluster = threadIdx.x;		//0 to CLUSTER_SIZE-1 unless numOutputs < CLUSTER_SIZE
@@ -268,11 +261,8 @@ __global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* 
 	size_t numClusterOffsets = (thoughtCon % CLUSTER_SIZE == 0 ? thoughtCon / CLUSTER_SIZE : thoughtCon / CLUSTER_SIZE + 1);
 	size_t numClusterPositions = ((int)numOutputs < CLUSTER_SIZE ? numOutputs : CLUSTER_SIZE);
 
-	float* thoughtlayer;
-	if (turn1front)
-		thoughtlayer = vm->thoughtlayer1;
-	else
-		thoughtlayer = vm->thoughtlayer2;
+	float* thoughtlayer = &vm->thoughtlayer[bpTurn*numThoughts];
+	float* thoughterrors = &vm->thoughterrors[bpTurn*numThoughts];
 
 	extern __shared__ float errors[];	//numClusterOffsets*numClusterPositions
 
@@ -306,7 +296,7 @@ __global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* 
 	//now finalize the error propagation
 	valueSumVector(errors, numClusterOffsets*numClusterPositions, threadIdx.x + numOutNeuronThreads*threadIdx.y, numOutNeuronThreads*numOffsetThreads);
 
-	vm->thoughterrors[thoughtNeuron] = posErrorFact[0] * errors[0];
+	thoughterrors[thoughtNeuron] = posErrorFact[0] * errors[0];
 }
 
 size_t getValueBackPropValueToThoughtSharedSize(ValueParameters* vp) {

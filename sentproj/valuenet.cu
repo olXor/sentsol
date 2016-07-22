@@ -166,13 +166,11 @@ void linkValueLayers(ValueCollection* vc, ThoughtNet* tn) {
 		}
 
 		if (vc->valuePars[i].numThoughtInputs != 0) {
-			vc->valueMats[i].thoughtlayer1 = tc->thoughtMats[i].outlayer1;
-			vc->valueMats[i].thoughtlayer2 = tc->thoughtMats[i].outlayer2;
+			vc->valueMats[i].thoughtlayer = tc->thoughtMats[i].outlayer;
 			vc->valueMats[i].thoughterrors = tc->thoughtMats[i].errors;
 		}
 		else {
-			vc->valueMats[i].thoughtlayer1 = NULL;
-			vc->valueMats[i].thoughtlayer2 = NULL;
+			vc->valueMats[i].thoughtlayer = NULL;
 			vc->valueMats[i].thoughterrors = NULL;
 		}
 	}
@@ -201,13 +199,9 @@ void ValueNet::incrementTurn() {
 	turn++;
 }
 
-bool ValueNet::turn1Front() {
-	return turn % 2 == 0;
-}
-
 //need layers in correct order for this net
 void ValueNet::compute() {
-	bool turn1front = turn1Front();
+	size_t bpTurn = thoughtNet->getBPTurn();
 	for (size_t i = 0; i < valueCollection.numValueLayers - 1; i++) {
 		ValueMatrices* vm = &valueCollection.valueMats[i];
 		ValueParameters* vp = &valueCollection.valuePars[i];
@@ -216,7 +210,7 @@ void ValueNet::compute() {
 		dim3 nBlocks(vp->forNBlockX);
 		dim3 shape(vp->forBlockX);
 		size_t shared = vm->forwardSharedMem;
-		computeValueLayer<<<nBlocks, shape, shared>>>(d_vm, d_vp, turn1front);
+		computeValueLayer<<<nBlocks, shape, shared>>>(d_vm, d_vp, bpTurn);
 		checkCudaErrors(cudaPeekAtLastError());
 	}
 	size_t lastLayer = valueCollection.numValueLayers - 1;
@@ -227,12 +221,12 @@ void ValueNet::compute() {
 	dim3 nBlocks(vp->forNBlockX);
 	dim3 shape(vp->forBlockX);
 	size_t shared = vm->forwardSharedMem;
-	computeValueLayerLast << <nBlocks, shape, shared >> >(d_vm, d_vp, turn1front);
+	computeValueLayerLast << <nBlocks, shape, shared >> >(d_vm, d_vp);
 	checkCudaErrors(cudaPeekAtLastError());
 }
 
 void ValueNet::backPropagate() {
-	bool turn1front = turn1Front();
+	size_t bpTurn = thoughtNet->getBPTurn();
 
 	size_t valueOutputLayer = valueCollection.numValueLayers - 1;
 	setErrorFactors<<<1,2,0>>>(valueCollection.d_valueMats[valueOutputLayer], valueCollection.d_valuePars[valueOutputLayer], posErrorFact, negErrorFact);
@@ -254,7 +248,7 @@ void ValueNet::backPropagate() {
 			dim3 thoughtNBlocks(vp->backThoughtNBlockX);
 			dim3 thoughtShape(vp->backThoughtBlockX, vp->backThoughtBlockY);
 			size_t thoughtShared = vm->bpThoughtSharedMem;
-			backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(d_vm, d_vp, turn1front, posErrorFact, negErrorFact);
+			backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(d_vm, d_vp, bpTurn, posErrorFact, negErrorFact);
 			checkCudaErrors(cudaPeekAtLastError());
 		}
 	}
@@ -273,7 +267,7 @@ void ValueNet::backPropagate() {
 	dim3 thoughtNBlocks(vp->backThoughtNBlockX);
 	dim3 thoughtShape(vp->backThoughtBlockX, vp->backThoughtBlockY);
 	size_t thoughtShared = vm->bpThoughtSharedMem;
-	backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(d_vm, d_vp, turn1front, posErrorFact, negErrorFact);
+	backPropagateValueToThought << <thoughtNBlocks, thoughtShape, thoughtShared >> >(d_vm, d_vp, bpTurn, posErrorFact, negErrorFact);
 	checkCudaErrors(cudaPeekAtLastError());
 }
 

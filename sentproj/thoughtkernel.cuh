@@ -16,11 +16,10 @@ struct ThoughtParameters;
 __host__ __device__ float thoughtTransferFunction(float in);
 __host__ __device__ float thoughtTransferDerivative(float in);
 
-__global__ void computeThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, bool turn1front);
-__global__ void backPropagateThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, bool turn1front, float* valueResult);
-__global__ void copyThoughtKernelOutputToHost(ThoughtMatrices* tm, ThoughtParameters* tp, float* hostoutput, bool turn1front);
+__global__ void computeThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, size_t bpTurn, size_t prevTurn);
+__global__ void backPropagateThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, size_t bpTurn);
+__global__ void copyThoughtKernelOutputToHost(ThoughtMatrices* tm, ThoughtParameters* tp, float* hostoutput, size_t bpTurn);
 __global__ void initRandomStates(ThoughtMatrices* tm, ThoughtParameters* tp, size_t seed, size_t sequenceStart);
-__global__ void kernelResetThoughts(ThoughtMatrices* tm, ThoughtParameters* tp);
 
 size_t getThoughtComputeSharedSize(ThoughtParameters* tp);
 size_t getThoughtBackPropSharedSize(ThoughtParameters* tp);

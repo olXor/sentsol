@@ -58,7 +58,7 @@ __device__ void thoughtSumVector(float* vec, size_t size, size_t threadNum, size
 	}
 }
 
-__global__ void computeThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, bool turn1front) {
+__global__ void computeThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, size_t bpTurn, size_t prevTurn) {
 	size_t outNeuron = blockIdx.x;
 	size_t clusterStart = outNeuron - outNeuron%CLUSTER_SIZE;
 	size_t inConnection = threadIdx.x;
@@ -71,33 +71,28 @@ __global__ void computeThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, 
 	size_t numInputs = tp->numInputs;
 	size_t numOutputs = tp->numOutputs;
 
-	float* inlayer;
-	float* outlayer;
-	float* prevoutlayer;
-	
-	if (turn1front) {
-		inlayer = tm->inlayer2;
-		outlayer = tm->outlayer1;
-		prevoutlayer = tm->outlayer2;
-	}
-	else {
-		inlayer = tm->inlayer1;
-		outlayer = tm->outlayer2;
-		prevoutlayer = tm->outlayer1;
-	}
+	float* inlayer = &tm->inlayer[prevTurn*numInputs];
+	float* outlayer = &tm->outlayer[bpTurn*numOutputs];
+	float* prevoutlayer = &tm->outlayer[prevTurn*numOutputs];
+	float* outTDs = &tm->outTDs[bpTurn*numOutputs];
 
 	extern __shared__ float outputs[];
 
-	for (size_t i = inConnection; i < totalCon; i += numInThreads) {
-		if (i < backCon)
-			outputs[i] = tm->weights[i + totalCon*outNeuron] * inlayer[(clusterStart + i) % numInputs];
-		else
-			outputs[i] = tm->weights[i + totalCon*outNeuron] * prevoutlayer[(clusterStart + i - backCon) % numOutputs];
+	if (bpTurn != prevTurn) {
+		for (size_t i = inConnection; i < totalCon; i += numInThreads) {
+			if (i < backCon)
+				outputs[i] = tm->weights[i + totalCon*outNeuron] * inlayer[(clusterStart + i) % numInputs];
+			else
+				outputs[i] = tm->weights[i + totalCon*outNeuron] * prevoutlayer[(clusterStart + i - backCon) % numOutputs];
+		}
+
+		__syncthreads();
+
+		thoughtSumVector(outputs, totalCon, inConnection, numInThreads);
 	}
-
-	__syncthreads();
-
-	thoughtSumVector(outputs, totalCon, inConnection, numInThreads);
+	else {
+		outputs[0] = 0;
+	}
 
 	__shared__ float randFact;
 	if (threadIdx.x == 0) {
@@ -110,7 +105,7 @@ __global__ void computeThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, 
 		outlayer[outNeuron] = thoughtTransferFunction(outputs[0] - tm->thresholds[outNeuron] + randFact);
 	}
 	else if (threadIdx.x == 1 % numInThreads) {
-		tm->outTDs[outNeuron] = thoughtTransferDerivative(outputs[0] - tm->thresholds[outNeuron] + randFact);
+		outTDs[outNeuron] = thoughtTransferDerivative(outputs[0] - tm->thresholds[outNeuron] + randFact);
 	}
 }
 
@@ -121,7 +116,7 @@ size_t getThoughtComputeSharedSize(ThoughtParameters* tp) {
 	return size;
 }
 
-__global__ void backPropagateThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, bool turn1front, float* valueResult) {
+__global__ void backPropagateThoughtLayer(ThoughtMatrices* tm, ThoughtParameters* tp, size_t bpTurn) {
 	size_t outNeuron = blockIdx.x;
 	size_t clusterStart = outNeuron - outNeuron%CLUSTER_SIZE;
 	size_t inConnection = threadIdx.x;
@@ -133,34 +128,17 @@ __global__ void backPropagateThoughtLayer(ThoughtMatrices* tm, ThoughtParameters
 
 	size_t numInputs = tp->numInputs;
 	size_t numOutputs = tp->numOutputs;
-
-	float* inlayer;
-	//float* outlayer;
-	float* prevoutlayer;
 	
-	if (turn1front) {
-		inlayer = tm->inlayer2;
-		//outlayer = tm->outlayer1;
-		prevoutlayer = tm->outlayer2;
-	}
-	else {
-		inlayer = tm->inlayer1;
-		//outlayer = tm->outlayer2;
-		prevoutlayer = tm->outlayer1;
-	}
+	float* inlayer = &tm->inlayer[bpTurn*numInputs];
+	float* prevoutlayer = &tm->outlayer[(bpTurn-1)*numOutputs];
+	float* outTDs = &tm->outTDs[bpTurn*numOutputs];
+	float* errors = &tm->errors[bpTurn*numOutputs];
+	float* inerrors = tm->inerrors;
+	if (inerrors != NULL)
+		inerrors = &inerrors[bpTurn*numInputs];
+	float* preverrors = &tm->errors[(bpTurn - 1)*numOutputs];
 
-	//temporary testing of whether this works without error propagation from the value net
-	//note this REQUIRES that the thought net has sigmoid transfer function
-	float outErrorTD = tm->errors[outNeuron] * tm->outTDs[outNeuron];
-	/*
-	float relError;
-	float outTF = outlayer[outNeuron];
-	if (outTF > 0.5f)
-		relError = outTF - 1.0f;
-	else
-		relError = outTF + 1.0f;
-	float outErrorTD = valueResult[0] * relError * fabs(tm->errors[outNeuron]) * tm->outTDs[outNeuron];
-	*/
+	float outErrorTD = errors[outNeuron] * outTDs[outNeuron];
 
 	if (inConnection == 0) {
 #ifdef MAX_WEIGHT_CHANGE
@@ -173,14 +151,23 @@ __global__ void backPropagateThoughtLayer(ThoughtMatrices* tm, ThoughtParameters
 
 	for (size_t i = inConnection; i < totalCon; i += numInThreads) {
 		float change;
-		if (i < backCon)
-			change = outErrorTD * inlayer[(clusterStart + i) % numInputs];
-		else
-			change = outErrorTD * prevoutlayer[(clusterStart + i - backCon) % numOutputs];
+		size_t weightNum = i + totalCon*outNeuron;
+		float weight = tm->weights[weightNum];
+		if (i < backCon) {
+			size_t inNeuron = (clusterStart + i) % numInputs;
+			change = outErrorTD * inlayer[inNeuron];
+			if (inerrors != NULL)
+				inerrors[inNeuron] += outErrorTD * weight;
+		}
+		else {
+			size_t prevNeuron = (clusterStart + i - backCon) % numOutputs;
+			change = outErrorTD * prevoutlayer[prevNeuron];
+			preverrors[prevNeuron] += outErrorTD * weight;
+		}
 #ifdef MAX_WEIGHT_CHANGE
 		change = thoughtBoundChange(change);
 #endif
-		tm->weights[i + totalCon*outNeuron] -= change;
+		tm->weights[weightNum] = weight - change;
 	}
 }
 
@@ -188,13 +175,9 @@ size_t getThoughtBackPropSharedSize(ThoughtParameters* tp) {
 	return 0;
 }
 
-__global__ void copyThoughtKernelOutputToHost(ThoughtMatrices* tm, ThoughtParameters* tp, float* hostoutput, bool turn1front) {
+__global__ void copyThoughtKernelOutputToHost(ThoughtMatrices* tm, ThoughtParameters* tp, float* hostoutput, size_t bpTurn) {
 	size_t outNeuron = threadIdx.x;
-	float* currentoutput;
-	if (turn1front)
-		currentoutput = tm->outlayer1;
-	else
-		currentoutput = tm->outlayer2;
+	float* currentoutput = &tm->outlayer[bpTurn*tp->numOutputs];
 	hostoutput[outNeuron] = currentoutput[outNeuron];
 }
 
@@ -203,13 +186,4 @@ __global__ void initRandomStates(ThoughtMatrices* tm, ThoughtParameters* tp, siz
 	size_t outNeuron = threadIdx.x;
 	size_t seq = sequenceStart + outNeuron;
 	curand_init(seed, seq, 0, &tm->randStates[outNeuron]);
-}
-
-__global__ void kernelResetThoughts(ThoughtMatrices* tm, ThoughtParameters* tp) {
-	size_t outNeuron = threadIdx.x;
-	size_t layerNum = blockIdx.x;
-	if (layerNum == 0)
-		tm->outlayer1[outNeuron] = 0.0f;
-	else if (layerNum == 1)
-		tm->outlayer2[outNeuron] = 0.0f;
 }

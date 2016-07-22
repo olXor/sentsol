@@ -55,10 +55,8 @@ ThoughtCollection* ThoughtNet::getThoughtCollection() {
 }
 
 void instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp) {
-	checkCudaErrors(cudaMalloc(&tm->inlayer1, tp->numInputs*sizeof(float)));
-	checkCudaErrors(cudaMalloc(&tm->inlayer2, tp->numInputs*sizeof(float)));
-	checkCudaErrors(cudaMalloc(&tm->outlayer1, tp->numOutputs*sizeof(float)));
-	checkCudaErrors(cudaMalloc(&tm->outlayer2, tp->numOutputs*sizeof(float)));
+	checkCudaErrors(cudaMalloc(&tm->inlayer, tp->numInputs*THOUGHT_BP_DEPTH*sizeof(float)));
+	checkCudaErrors(cudaMalloc(&tm->outlayer, tp->numOutputs*THOUGHT_BP_DEPTH*sizeof(float)));
 
 	size_t totalConnectivity = tp->backwardConnectivity + tp->sideConnectivity;
 	size_t numWeights = tp->numOutputs*totalConnectivity;
@@ -80,8 +78,8 @@ void instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp) {
 	checkCudaErrors(cudaMemcpy(tm->thresholds, h_thresholds, numThresholds*sizeof(float), cudaMemcpyHostToDevice));
 	delete [] h_thresholds;
 
-	checkCudaErrors(cudaMalloc(&tm->outTDs, tp->numOutputs*sizeof(float)));
-	checkCudaErrors(cudaMalloc(&tm->errors, tp->numOutputs*sizeof(float)));
+	checkCudaErrors(cudaMalloc(&tm->outTDs, tp->numOutputs*THOUGHT_BP_DEPTH*sizeof(float)));
+	checkCudaErrors(cudaMalloc(&tm->errors, tp->numOutputs*THOUGHT_BP_DEPTH*sizeof(float)));
 
 	tm->forwardSharedMem = getThoughtComputeSharedSize(tp);
 	tm->backwardSharedMem = getThoughtBackPropSharedSize(tp);
@@ -90,6 +88,8 @@ void instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp) {
 }
 
 void linkThoughtLayers(ThoughtCollection* tc) {
+	(&tc->thoughtMats[0])->inerrors = NULL;
+
 	for (size_t i = 1; i < tc->numThoughtLayers; i++) {
 		ThoughtMatrices* mat = &tc->thoughtMats[i];
 		ThoughtMatrices* prevMat = &tc->thoughtMats[i-1];
@@ -101,10 +101,9 @@ void linkThoughtLayers(ThoughtCollection* tc) {
 			throw new std::runtime_error("Layer sizes didn't match during link step");
 		}
 
-		checkCudaErrors(cudaFree(mat->inlayer1));
-		mat->inlayer1 = prevMat->outlayer1;
-		checkCudaErrors(cudaFree(mat->inlayer2));
-		mat->inlayer2 = prevMat->outlayer2;
+		checkCudaErrors(cudaFree(mat->inlayer));
+		mat->inlayer = prevMat->outlayer;
+		mat->inerrors = prevMat->errors;
 	}
 }
 
@@ -141,10 +140,8 @@ void initializeRandomStates(ThoughtCollection* tc) {
 ThoughtNet::~ThoughtNet() {
 	for (size_t i = 0; i < thoughtCollection.numThoughtLayers; i++) {
 		ThoughtMatrices tm = thoughtCollection.thoughtMats[i];
-		checkCudaErrors(cudaFree(tm.inlayer1));
-		checkCudaErrors(cudaFree(tm.inlayer2));
-		checkCudaErrors(cudaFree(tm.outlayer1));
-		checkCudaErrors(cudaFree(tm.outlayer2));
+		checkCudaErrors(cudaFree(tm.inlayer));
+		checkCudaErrors(cudaFree(tm.outlayer));
 		checkCudaErrors(cudaFree(tm.weights));
 		checkCudaErrors(cudaFree(tm.thresholds));
 		checkCudaErrors(cudaFree(tm.outTDs));
@@ -156,11 +153,11 @@ ThoughtNet::~ThoughtNet() {
 }
 
 void ThoughtNet::incrementTurn() {
-	turn++;
-}
-
-bool ThoughtNet::turn1Front() {
-	return turn % 2 == 0;
+	bpTurn++;
+	if (bpTurn >= THOUGHT_BP_DEPTH) {
+		bpTurn = THOUGHT_BP_DEPTH - 1;
+		backPropagate();
+	}
 }
 
 size_t ThoughtNet::getNumInputs() {
@@ -180,7 +177,12 @@ size_t ThoughtNet::getNumClusters() {
 }
 
 void ThoughtNet::compute() {
-	bool turn1front = turn1Front();
+	size_t pTurn;
+	if (bpTurn == 0)
+		pTurn = prevTurn;
+	else
+		pTurn = bpTurn - 1;
+
 	for (size_t i = 0; i < thoughtCollection.numThoughtLayers; i++) {
 		ThoughtMatrices* tm = &thoughtCollection.thoughtMats[i];
 		ThoughtParameters* tp = &thoughtCollection.thoughtPars[i];
@@ -189,56 +191,33 @@ void ThoughtNet::compute() {
 		dim3 nBlocks(tp->forNBlockX);
 		dim3 shape(tp->forBlockX);
 		size_t shared = tm->forwardSharedMem;
-		computeThoughtLayer<<<nBlocks, shape, shared>>>(d_tm, d_tp, turn1front);
+		computeThoughtLayer<<<nBlocks, shape, shared>>>(d_tm, d_tp, bpTurn, pTurn);
 		checkCudaErrors(cudaPeekAtLastError());
 	}
 }
 
 //note that the order of execution shouldn't matter here
 void ThoughtNet::backPropagate() {
-	bool turn1front = turn1Front();
-	for (size_t i = 0; i < thoughtCollection.numThoughtLayers; i++) {
-		ThoughtMatrices* tm = &thoughtCollection.thoughtMats[i];
-		ThoughtParameters* tp = &thoughtCollection.thoughtPars[i];
-		ThoughtMatrices* d_tm = thoughtCollection.d_thoughtMats[i];
-		ThoughtParameters* d_tp = thoughtCollection.d_thoughtPars[i];
-		dim3 nBlocks(tp->backNBlockX);
-		dim3 shape(tp->backBlockX);
-		size_t shared = tm->backwardSharedMem;
-		backPropagateThoughtLayer<<<nBlocks, shape, shared>>>(d_tm, d_tp, turn1front, valueResult);
-		checkCudaErrors(cudaPeekAtLastError());
+	prevTurn = bpTurn;
+	while (bpTurn > 0) {
+		for (size_t i = 0; i < thoughtCollection.numThoughtLayers; i++) {
+			ThoughtMatrices* tm = &thoughtCollection.thoughtMats[i];
+			ThoughtParameters* tp = &thoughtCollection.thoughtPars[i];
+			ThoughtMatrices* d_tm = thoughtCollection.d_thoughtMats[i];
+			ThoughtParameters* d_tp = thoughtCollection.d_thoughtPars[i];
+			dim3 nBlocks(tp->backNBlockX);
+			dim3 shape(tp->backBlockX);
+			size_t shared = tm->backwardSharedMem;
+			backPropagateThoughtLayer << <nBlocks, shape, shared >> >(d_tm, d_tp, bpTurn);
+			checkCudaErrors(cudaPeekAtLastError());
+		}
+		bpTurn--;
 	}
 }
 
 void ThoughtNet::resetThoughts() {
-	for (size_t i = 0; i < thoughtCollection.numThoughtLayers; i++) {
-		ThoughtMatrices* tm = &thoughtCollection.thoughtMats[i];
-		ThoughtParameters* tp = &thoughtCollection.thoughtPars[i];
-		ThoughtMatrices* d_tm = thoughtCollection.d_thoughtMats[i];
-		ThoughtParameters* d_tp = thoughtCollection.d_thoughtPars[i];
-		dim3 nBlocks(2);
-		dim3 shape(tp->numOutputs);
-		kernelResetThoughts << <nBlocks, shape >> >(d_tm, d_tp);
-		checkCudaErrors(cudaPeekAtLastError());
-	}
-}
-
-//note: returns the BACK input layer, so that one can immediately call calculate afterwards
-float* ThoughtNet::getDeviceInputLayer() {
-	bool turn1front = turn1Front();
-	if (turn1front)
-		return thoughtCollection.thoughtMats[0].inlayer2;
-	else
-		return thoughtCollection.thoughtMats[0].inlayer1;
-}
-
-//note: returns the FRONT output layer, so that one can immediately call this after calculating
-float* ThoughtNet::getDeviceOutputLayer() {
-	bool turn1front = turn1Front();
-	if (turn1front)
-		return thoughtCollection.thoughtMats[thoughtCollection.numThoughtLayers - 1].outlayer1;
-	else
-		return thoughtCollection.thoughtMats[thoughtCollection.numThoughtLayers - 1].outlayer2;
+	backPropagate();
+	prevTurn = 0;
 }
 
 ThoughtMatrices* ThoughtNet::getLastLevelMatrices() {
@@ -250,7 +229,7 @@ ThoughtParameters* ThoughtNet::getLastLevelParameters() {
 }
 
 void ThoughtNet::copyOutputToHost(float* d_outputs) {
-	copyThoughtKernelOutputToHost << <1, numOutputs, 0 >> >(getLastLevelMatrices(), getLastLevelParameters(), d_outputs, turn1Front());
+	copyThoughtKernelOutputToHost << <1, numOutputs, 0 >> >(getLastLevelMatrices(), getLastLevelParameters(), d_outputs, bpTurn);
 }
 
 void ThoughtNet::saveWeights(std::string fname) {
@@ -317,4 +296,14 @@ void ThoughtNet::loadWeights(std::string fname) {
 
 void ThoughtNet::setValueResultPointer(float* vr) {
 	valueResult = vr;
+}
+
+size_t ThoughtNet::getBPTurn() {
+	return bpTurn;
+}
+
+float* ThoughtNet::getDeviceInputLayer() {
+	ThoughtMatrices* tm = &thoughtCollection.thoughtMats[0];
+	ThoughtParameters* tp = &thoughtCollection.thoughtPars[0];
+	return &tm->inlayer[bpTurn*tp->numInputs];
 }

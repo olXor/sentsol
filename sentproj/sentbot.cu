@@ -20,7 +20,7 @@ SentBot::~SentBot() {
 }
 
 void SentBot::takeTurn() {
-	thoughtNet->incrementTurn();
+	thoughtNet->incrementTurn();	//automatically backprops thoughtNet here
 	valueNet->incrementTurn();
 	float* d_inputs = thoughtNet->getDeviceInputLayer();
 	//use the below if we're not using mapped memory for the output
@@ -38,8 +38,6 @@ void SentBot::takeTurn() {
 	valueNet->compute();
 
 	valueNet->backPropagate();
-
-	thoughtNet->backPropagate();
 
 	checkCudaErrors(cudaEventSynchronize(calcDone));
 }

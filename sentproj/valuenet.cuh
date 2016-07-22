@@ -15,8 +15,7 @@
 struct ValueMatrices {
 	float* inlayer;
 	float* outlayer;
-	float* thoughtlayer1;
-	float* thoughtlayer2;
+	float* thoughtlayer;
 
 	float* weights;
 	float* posWeightChanges;
@@ -86,7 +85,7 @@ public:
 	void updateWeights(float pleasurePain);
 
 	void saveWeights(std::string fname);
-	void ValueNet::loadWeights(std::string fname);
+	void loadWeights(std::string fname);
 
 private:
 	size_t turn = 0;
@@ -101,7 +100,6 @@ private:
 	float* negErrorFact;
 
 	ValueCollection createValueCollection(ThoughtNet* tn);
-
 };
 
 void instantiateValueMatrices(ValueMatrices* vm, ValueParameters* vp);

@@ -11,7 +11,9 @@
 
 #define STEPFACTOR 1e-5f
 
-#define VALUE_DECAY_FACTOR 0.995
+#define VALUE_DECAY_FACTOR 1.0
+
+#define THOUGHT_BP_DEPTH 1000
 
 #define POS_VALUE_GOAL 1.0f
 #define NEG_VALUE_GOAL -1.0f

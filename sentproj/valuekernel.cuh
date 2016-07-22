@@ -15,11 +15,11 @@ struct ValueParameters;
 __host__ __device__ float valueTransferFunction(float in);
 __host__ __device__ float valueTransferDerivative(float in);
 
-__global__ void computeValueLayer(ValueMatrices* vm, ValueParameters* vp, bool turn1front);
-__global__ void computeValueLayerLast(ValueMatrices* vm, ValueParameters* vp, bool turn1front);
+__global__ void computeValueLayer(ValueMatrices* vm, ValueParameters* vp, size_t bpTurn);
+__global__ void computeValueLayerLast(ValueMatrices* vm, ValueParameters* vp);
 __global__ void backPropagateValueToValue(ValueMatrices* vm, ValueParameters* vp, float* posErrorFact, float* negErrorFact);
 __global__ void backPropagateValueToValueFirstLayer(ValueMatrices* vm, ValueParameters* vp, float* posErrorFact, float* negErrorFact);
-__global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* vp, bool turn1front, float* posErrorFact, float* negErrorFact);
+__global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* vp, size_t bpTurn, float* posErrorFact, float* negErrorFact);
 __global__ void updateValueWeights(ValueMatrices* vm, ValueParameters* vp, float pleasurePain);
 __global__ void setErrorFactors(ValueMatrices* vm, ValueParameters* vp, float* posErrorFact, float* negErrorFact);
 
