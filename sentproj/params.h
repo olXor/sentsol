@@ -15,8 +15,8 @@
 
 #define THOUGHT_BP_DEPTH 1000
 
-#define POS_VALUE_GOAL 1.0f
-#define NEG_VALUE_GOAL -1.0f
+#define POS_VALUE_GOAL 10.0f
+#define NEG_VALUE_GOAL -10.0f
 
 #define RECTIFIER 0
 #define SIGMOID 1

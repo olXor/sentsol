@@ -129,13 +129,13 @@ __global__ void backPropagateThoughtLayer(ThoughtMatrices* tm, ThoughtParameters
 	size_t numInputs = tp->numInputs;
 	size_t numOutputs = tp->numOutputs;
 	
-	float* inlayer = &tm->inlayer[bpTurn*numInputs];
+	float* inlayer = &tm->inlayer[(bpTurn-1)*numInputs];
 	float* prevoutlayer = &tm->outlayer[(bpTurn-1)*numOutputs];
 	float* outTDs = &tm->outTDs[bpTurn*numOutputs];
 	float* errors = &tm->errors[bpTurn*numOutputs];
 	float* inerrors = tm->inerrors;
 	if (inerrors != NULL)
-		inerrors = &inerrors[bpTurn*numInputs];
+		inerrors = &inerrors[(bpTurn-1)*numInputs];
 	float* preverrors = &tm->errors[(bpTurn - 1)*numOutputs];
 
 	float outErrorTD = errors[outNeuron] * outTDs[outNeuron];

@@ -60,10 +60,11 @@ int main() {
 	initscr();
 	raw();
 	keypad(stdscr, TRUE);
-	//cbreak();
+	cbreak();
 	curs_set(0);
 	noecho();
 	nodelay(stdscr, TRUE);
+	timeout(-1);
 
 	refresh();
 
@@ -74,6 +75,21 @@ int main() {
 	size_t mazesSolved = 0;
 	size_t mazesFailed = 0;
 	SentBot* bot = new SentBot(4, 4, 4, 4);
+
+	mvwprintw(mazewin, 0, 0, "Do you want to start a new weights file (overwriting the old one)?");
+	wrefresh(mazewin);
+
+	std::ofstream avghistory;
+
+	int ch = getch();
+	if (!(ch == 'y' || ch == 'Y')) {
+		bot->loadWeights("maze");
+		avghistory.open("mazehistory", std::ios::app);
+	}
+	else {
+		avghistory.open("mazehistory");
+	}
+
 	size_t turn = 0;
 	float mazeaverage = 0;
 #define NUM_MAZE_AVERAGE_RESULTS 100
@@ -81,7 +97,6 @@ int main() {
 	size_t mazerespos = 0;
 	float excessPain = 0.0f;
 	size_t numWinsInRow = 0;
-	std::ofstream avghistory("mazehistory");
 	while (true) {
 		Maze* maze = new Maze(mazesize, 2*mazesize);
 		size_t leftlength = maze->getWallHugLength(true);
@@ -93,7 +108,7 @@ int main() {
 		while (true) {
 			turnsWandering++;
 			turn++;
-			for (size_t i = 0; i < 20; i++) {
+			for (size_t i = 0; i < 100; i++) {
 				maze->writeActorInputs(bot->h_inputs);
 				bot->takeTurn();
 			}
@@ -122,16 +137,18 @@ int main() {
 			}
 		}
 		bot->resetThoughts();
+		bot->saveWeights("maze");
 		mazeres[mazerespos] = mazesize;
 		mazerespos = (mazerespos + 1) % NUM_MAZE_AVERAGE_RESULTS;
 		mazeaverage = 0;
-		for (size_t i = 0; i < NUM_MAZE_AVERAGE_RESULTS; i++) {
-			mazeaverage += mazeres[i];
+		if (mazesSolved + mazesFailed > NUM_MAZE_AVERAGE_RESULTS) {
+			for (size_t i = 0; i < NUM_MAZE_AVERAGE_RESULTS; i++) {
+				mazeaverage += mazeres[i];
+			}
+			mazeaverage /= NUM_MAZE_AVERAGE_RESULTS;
+			avghistory << mazeaverage << std::endl;
 		}
-		mazeaverage /= NUM_MAZE_AVERAGE_RESULTS;
 		printOutputs(textwin, bot->h_outputs, 4, turnsWandering, leftlength, rightlength, mazesSolved, mazesFailed, mazeaverage);
-		bot->saveWeights("maze");
-		avghistory << mazeaverage << std::endl;
 
 		delete maze;
 	}

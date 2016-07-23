@@ -158,6 +158,8 @@ void linkValueLayers(ValueCollection* vc, ThoughtNet* tn) {
 
 			checkCudaErrors(cudaFree(vc->valueMats[i].inlayer));
 			vc->valueMats[i].inlayer = vc->valueMats[i - 1].outlayer;
+			checkCudaErrors(cudaFree(vc->valueMats[i].inerrors));
+			vc->valueMats[i].inerrors = vc->valueMats[i - 1].outerrors;
 		}
 
 		if (vc->valuePars[i].numThoughtInputs != 0 && vc->valuePars[i].numThoughtInputs != tc->thoughtPars[i].numOutputs) {
