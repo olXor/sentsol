@@ -15,9 +15,14 @@ struct ThoughtMatrices {
 	float* inlayer;	//THOUGHT_BP_DEPTH*numInputs
 	float* outlayer;
 	float* outTDs;
+	float* outNew;	//the new TF, before retain is applied
 
 	float* weights;
+	float* weightChanges;
 	float* thresholds;
+	float* thresholdChanges;
+	float* retains;
+	float* retainChanges;
 
 	float* errors;
 	float* inerrors;
@@ -26,6 +31,7 @@ struct ThoughtMatrices {
 
 	size_t forwardSharedMem;
 	size_t backwardSharedMem;
+	size_t updateSharedMem;
 };
 
 struct ThoughtParameters {
@@ -35,10 +41,17 @@ struct ThoughtParameters {
 	size_t backNBlockX;
 	size_t backBlockX;
 
+	size_t updateNBlockX;
+	size_t updateBlockX;
+
 	size_t numInputs;
 	size_t numOutputs;
 	size_t backwardConnectivity;
 	size_t sideConnectivity;
+
+	bool zeroRetains;
+
+	size_t layer;
 };
 
 struct ThoughtCollection {

@@ -46,7 +46,10 @@ ValueCollection ValueNet::createValueCollection(ThoughtNet* tn) {
 		else
 			vp->numThoughtInputs = tn->getThoughtCollection()->thoughtPars[i].numOutputs;
 
-		vp->backwardConnectivity = std::min(2 * CLUSTER_SIZE, (int)vp->numInputs);
+		if (i == numLayers - 1 || i == numLayers - 2)
+			vp->backwardConnectivity = vp->numInputs;
+		else
+			vp->backwardConnectivity = std::min(2 * CLUSTER_SIZE, (int)vp->numInputs);
 		vp->thoughtConnectivity = std::min(CLUSTER_SIZE, (int)vp->numThoughtInputs);
 
 		//---thread shaping

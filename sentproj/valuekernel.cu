@@ -5,8 +5,8 @@ __host__ __device__ float valueTransferFunction(float in) {
 	if (in / TRANSFER_WIDTH > TRANSFER_FUNCTION_LIMIT)
 		return in;
 	if (in / TRANSFER_WIDTH < -TRANSFER_FUNCTION_LIMIT)
-		return NEGATIVE_TRANSFER_FACTOR*in;
-	return TRANSFER_WIDTH*(log(1.0f + exp(in / TRANSFER_WIDTH)) - NEGATIVE_TRANSFER_FACTOR*log(1.0f + exp(-in / TRANSFER_WIDTH)));
+		return VALUE_NEGATIVE_TRANSFER_FACTOR*in;
+	return TRANSFER_WIDTH*(log(1.0f + exp(in / TRANSFER_WIDTH)) - VALUE_NEGATIVE_TRANSFER_FACTOR*log(1.0f + exp(-in / TRANSFER_WIDTH)));
 #elif VALUE_TRANSFER == SIGMOID
 	if (in / TRANSFER_WIDTH > TRANSFER_FUNCTION_LIMIT)
 		return 1.0f;
@@ -23,8 +23,8 @@ __host__ __device__ float valueTransferDerivative(float in) {
 	if (in / TRANSFER_WIDTH > TRANSFER_FUNCTION_LIMIT)
 		return 1.0f;
 	if (in / TRANSFER_WIDTH < -TRANSFER_FUNCTION_LIMIT)
-		return NEGATIVE_TRANSFER_FACTOR;
-	return 1.0f / (1.0f + exp(-in / TRANSFER_WIDTH)) + NEGATIVE_TRANSFER_FACTOR / (1.0f + exp(in / TRANSFER_WIDTH));
+		return VALUE_NEGATIVE_TRANSFER_FACTOR;
+	return 1.0f / (1.0f + exp(-in / TRANSFER_WIDTH)) + VALUE_NEGATIVE_TRANSFER_FACTOR / (1.0f + exp(in / TRANSFER_WIDTH));
 #elif VALUE_TRANSFER == SIGMOID
 	float tf = valueTransferFunction(in);
 	return tf*(1-tf);
@@ -34,12 +34,12 @@ __host__ __device__ float valueTransferDerivative(float in) {
 }
 
 //apparently we need to have these generic helper functions in every compilation unit, aka in every file. Annoying!
-#ifdef MAX_WEIGHT_CHANGE
+#ifdef VALUE_MAX_WEIGHT_CHANGE
 __device__ float valueBoundChange(float change) {
-	if (change > MAX_WEIGHT_CHANGE)
-		change = MAX_WEIGHT_CHANGE;
-	else if (change < -MAX_WEIGHT_CHANGE)
-		change = -MAX_WEIGHT_CHANGE;
+	if (change > VALUE_MAX_WEIGHT_CHANGE)
+		change = VALUE_MAX_WEIGHT_CHANGE;
+	else if (change < -VALUE_MAX_WEIGHT_CHANGE)
+		change = -VALUE_MAX_WEIGHT_CHANGE;
 	return change;
 }
 #endif
@@ -168,14 +168,14 @@ __global__ void backPropagateValueToValue(ValueMatrices* vm, ValueParameters* vp
 				errors[errorIndex] = outErrorTD * vm->weights[weightPos];
 
 				float change = outErrorTD * vm->inlayer[inNeuron];
-#ifdef MAX_WEIGHT_CHANGE
+#ifdef VALUE_MAX_WEIGHT_CHANGE
 				//change = valueBoundChange(change);
 #endif
 				vm->posWeightChanges[weightPos] = vm->posWeightChanges[weightPos]*VALUE_DECAY_FACTOR - change * posErrorFact[0];
 				vm->negWeightChanges[weightPos] = vm->negWeightChanges[weightPos]*VALUE_DECAY_FACTOR - change * negErrorFact[0];
 				
 				//threshold
-#ifdef MAX_WEIGHT_CHANGE
+#ifdef VALUE_MAX_WEIGHT_CHANGE
 				//outErrorTD = valueBoundChange(outErrorTD);
 #endif
 				if (inNeuron == outClusterStart) {
@@ -228,7 +228,7 @@ __global__ void backPropagateValueToValueFirstLayer(ValueMatrices* vm, ValuePara
 	for (size_t i = inConnection; i < backCon; i += numInThreads) {
 		float change = outErrorTD * vm->inlayer[(clusterStart + i) % numInputs];
 
-#ifdef MAX_WEIGHT_CHANGE
+#ifdef VALUE_MAX_WEIGHT_CHANGE
 		//change = valueBoundChange(change);
 #endif
 		size_t weightPos = i + totalCon*outNeuron;
@@ -282,7 +282,7 @@ __global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* 
 				errors[errorIndex] = outErrorTD * vm->weights[weightPos];
 
 				float change = outErrorTD * thoughtlayer[thoughtNeuron];
-#ifdef MAX_WEIGHT_CHANGE
+#ifdef VALUE_MAX_WEIGHT_CHANGE
 				//change = valueBoundChange(change);
 #endif
 				vm->posWeightChanges[weightPos] = vm->posWeightChanges[weightPos] * VALUE_DECAY_FACTOR - change * posErrorFact[0];
@@ -296,7 +296,7 @@ __global__ void backPropagateValueToThought(ValueMatrices* vm, ValueParameters* 
 	//now finalize the error propagation
 	valueSumVector(errors, numClusterOffsets*numClusterPositions, threadIdx.x + numOutNeuronThreads*threadIdx.y, numOutNeuronThreads*numOffsetThreads);
 
-	thoughterrors[thoughtNeuron] = posErrorFact[0] * errors[0];
+	thoughterrors[thoughtNeuron] = THOUGHT_STEP_MULT * posErrorFact[0] * errors[0];
 }
 
 size_t getValueBackPropValueToThoughtSharedSize(ValueParameters* vp) {
@@ -313,7 +313,7 @@ size_t getValueBackPropValueToThoughtSharedSize(ValueParameters* vp) {
 __global__ void updateValueWeights(ValueMatrices* vm, ValueParameters* vp, float pleasurePain) {
 	size_t outNeuron = blockIdx.x;
 	size_t inConnection = threadIdx.x;
-	size_t numInThreads = vp->updateBlockX;	//totalCon
+	size_t numInThreads = vp->updateBlockX;	//totalCon + 1
 
 	size_t backCon = vp->backwardConnectivity;
 	size_t thoughtCon = vp->thoughtConnectivity;
@@ -326,7 +326,7 @@ __global__ void updateValueWeights(ValueMatrices* vm, ValueParameters* vp, float
 				change = pleasurePain*vm->posThresholdChanges[outNeuron];
 			else
 				change = -pleasurePain*vm->negThresholdChanges[outNeuron];
-#ifdef MAX_WEIGHT_CHANGE
+#ifdef VALUE_MAX_WEIGHT_CHANGE
 			change = valueBoundChange(change);
 #endif
 			vm->thresholds[outNeuron] += change;
@@ -343,7 +343,7 @@ __global__ void updateValueWeights(ValueMatrices* vm, ValueParameters* vp, float
 				change = pleasurePain*vm->posWeightChanges[weightNum];
 			else
 				change = -pleasurePain*vm->negWeightChanges[weightNum];
-#ifdef MAX_WEIGHT_CHANGE
+#ifdef VALUE_MAX_WEIGHT_CHANGE
 			change = valueBoundChange(change);
 #endif
 			vm->weights[weightNum] += change;

@@ -19,6 +19,7 @@ ThoughtCollection ThoughtNet::createThoughtCollection() {
 	//set up ThoughtParameters
 	for (size_t i = 0; i < numLayers; i++) {
 		ThoughtParameters* tp = &tc.thoughtPars[i];
+		tp->layer = i;
 		if (i == 0)
 			tp->numInputs = numInputs;
 		else
@@ -29,7 +30,10 @@ ThoughtCollection ThoughtNet::createThoughtCollection() {
 		else
 			tp->numOutputs = numClusters*CLUSTER_SIZE;
 
-		tp->backwardConnectivity = std::min(2 * CLUSTER_SIZE, (int)tp->numInputs);
+		if (i == numLayers - 1)
+			tp->backwardConnectivity = tp->numInputs;
+		else
+			tp->backwardConnectivity = std::min(2 * CLUSTER_SIZE, (int)tp->numInputs);
 		tp->sideConnectivity = std::min(CLUSTER_SIZE, (int)tp->numOutputs);
 
 		//---thread shaping
@@ -38,7 +42,15 @@ ThoughtCollection ThoughtNet::createThoughtCollection() {
 
 		tp->backNBlockX = tp->numOutputs;
 		tp->backBlockX = tp->backwardConnectivity + tp->sideConnectivity;
+
+		tp->updateNBlockX = tp->numOutputs;
+		tp->updateBlockX = tp->backwardConnectivity + tp->sideConnectivity + 2;
 		//-----------------
+
+		if (i == numLayers - 1)
+			tp->zeroRetains = true;
+		else
+			tp->zeroRetains = false;
 
 		instantiateThoughtMatrices(&tc.thoughtMats[i], &tc.thoughtPars[i]);
 	}
@@ -57,6 +69,7 @@ ThoughtCollection* ThoughtNet::getThoughtCollection() {
 void instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp) {
 	checkCudaErrors(cudaMalloc(&tm->inlayer, tp->numInputs*THOUGHT_BP_DEPTH*sizeof(float)));
 	checkCudaErrors(cudaMalloc(&tm->outlayer, tp->numOutputs*THOUGHT_BP_DEPTH*sizeof(float)));
+	checkCudaErrors(cudaMalloc(&tm->outNew, tp->numOutputs*THOUGHT_BP_DEPTH*sizeof(float)));
 
 	size_t totalConnectivity = tp->backwardConnectivity + tp->sideConnectivity;
 	size_t numWeights = tp->numOutputs*totalConnectivity;
@@ -67,7 +80,15 @@ void instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp) {
 	}
 	checkCudaErrors(cudaMalloc(&tm->weights, numWeights*sizeof(float)));
 	checkCudaErrors(cudaMemcpy(tm->weights, h_weights, numWeights*sizeof(float), cudaMemcpyHostToDevice));
-	delete [] h_weights;
+	delete[] h_weights;
+
+	float* h_weightChanges = new float[numWeights];
+	for (size_t i = 0; i < numWeights; i++) {
+		h_weightChanges[i] = 0;
+	}
+	checkCudaErrors(cudaMalloc(&tm->weightChanges, numWeights*sizeof(float)));
+	checkCudaErrors(cudaMemcpy(tm->weightChanges, h_weightChanges, numWeights*sizeof(float), cudaMemcpyHostToDevice));
+	delete[] h_weightChanges;
 
 	size_t numThresholds = tp->numOutputs;
 	float* h_thresholds = new float[numThresholds];
@@ -76,13 +97,40 @@ void instantiateThoughtMatrices(ThoughtMatrices* tm, ThoughtParameters* tp) {
 	}
 	checkCudaErrors(cudaMalloc(&tm->thresholds, numThresholds*sizeof(float)));
 	checkCudaErrors(cudaMemcpy(tm->thresholds, h_thresholds, numThresholds*sizeof(float), cudaMemcpyHostToDevice));
-	delete [] h_thresholds;
+	delete[] h_thresholds;
+
+	float* h_thresholdChanges = new float[numThresholds];
+	for (size_t i = 0; i < numThresholds; i++) {
+		h_thresholdChanges[i] = 0;
+	}
+	checkCudaErrors(cudaMalloc(&tm->thresholdChanges, numThresholds*sizeof(float)));
+	checkCudaErrors(cudaMemcpy(tm->thresholdChanges, h_thresholdChanges, numThresholds*sizeof(float), cudaMemcpyHostToDevice));
+	delete[] h_thresholdChanges;
+
+	float* h_retains = new float[numThresholds];
+	for (size_t i = 0; i < numThresholds; i++) {
+		if (!tp->zeroRetains)
+			h_retains[i] = 1.0f*(rand() % 10) / 10.0f;
+		else
+			h_retains[i] = 0;
+	}
+	checkCudaErrors(cudaMalloc(&tm->retains, numThresholds*sizeof(float)));
+	checkCudaErrors(cudaMemcpy(tm->retains, h_retains, numThresholds*sizeof(float), cudaMemcpyHostToDevice));
+
+	float* h_retainChanges = new float[numThresholds];
+	for (size_t i = 0; i < numThresholds; i++) {
+		h_retainChanges[i] = 0;
+	}
+	checkCudaErrors(cudaMalloc(&tm->retainChanges, numThresholds*sizeof(float)));
+	checkCudaErrors(cudaMemcpy(tm->retainChanges, h_retainChanges, numThresholds*sizeof(float), cudaMemcpyHostToDevice));
+	delete[] h_retainChanges;
 
 	checkCudaErrors(cudaMalloc(&tm->outTDs, tp->numOutputs*THOUGHT_BP_DEPTH*sizeof(float)));
 	checkCudaErrors(cudaMalloc(&tm->errors, tp->numOutputs*THOUGHT_BP_DEPTH*sizeof(float)));
 
 	tm->forwardSharedMem = getThoughtComputeSharedSize(tp);
 	tm->backwardSharedMem = getThoughtBackPropSharedSize(tp);
+	tm->updateSharedMem = getThoughtUpdateSharedSize(tp);
 
 	checkCudaErrors(cudaMalloc(&tm->randStates, tp->numOutputs*sizeof(curandState)));
 }
@@ -194,6 +242,18 @@ void ThoughtNet::compute() {
 		computeThoughtLayer<<<nBlocks, shape, shared>>>(d_tm, d_tp, bpTurn, pTurn);
 		checkCudaErrors(cudaPeekAtLastError());
 	}
+
+#ifdef NORMALIZE_THOUGHT_OUTPUTS
+	ThoughtMatrices* tm = &thoughtCollection.thoughtMats[thoughtCollection.numThoughtLayers - 1];
+	ThoughtParameters* tp = &thoughtCollection.thoughtPars[thoughtCollection.numThoughtLayers - 1];
+	ThoughtMatrices* d_tm = thoughtCollection.d_thoughtMats[thoughtCollection.numThoughtLayers - 1];
+	ThoughtParameters* d_tp = thoughtCollection.d_thoughtPars[thoughtCollection.numThoughtLayers - 1];
+	dim3 nBlocks(1);
+	dim3 shape(tp->numOutputs);
+	size_t shared = 2 * tp->numOutputs;
+	normalizeOutputs << <nBlocks, shape, shared >> >(d_tm, d_tp, bpTurn);
+	checkCudaErrors(cudaPeekAtLastError());
+#endif
 }
 
 //note that the order of execution shouldn't matter here
@@ -212,6 +272,18 @@ void ThoughtNet::backPropagate() {
 			checkCudaErrors(cudaPeekAtLastError());
 		}
 		bpTurn--;
+	}
+
+	for (size_t i = 0; i < thoughtCollection.numThoughtLayers; i++) {
+		ThoughtMatrices* tm = &thoughtCollection.thoughtMats[i];
+		ThoughtParameters* tp = &thoughtCollection.thoughtPars[i];
+		ThoughtMatrices* d_tm = thoughtCollection.d_thoughtMats[i];
+		ThoughtParameters* d_tp = thoughtCollection.d_thoughtPars[i];
+		dim3 nBlocks(tp->updateNBlockX);
+		dim3 shape(tp->updateBlockX);
+		size_t shared = tm->updateSharedMem;
+		updateThoughtWeights << <nBlocks, shape, shared >> >(d_tm, d_tp);
+		checkCudaErrors(cudaPeekAtLastError());
 	}
 }
 
@@ -244,12 +316,14 @@ void ThoughtNet::saveWeights(std::string fname) {
 		size_t numThresholds = tp->numOutputs;
 		float* h_weights = new float[numWeights];
 		float* h_thresholds = new float[numThresholds];
+		float* h_retains = new float[numThresholds];
 		checkCudaErrors(cudaMemcpy(h_weights, tm->weights, numWeights*sizeof(float), cudaMemcpyDeviceToHost));
 		checkCudaErrors(cudaMemcpy(h_thresholds, tm->thresholds, numThresholds*sizeof(float), cudaMemcpyDeviceToHost));
+		checkCudaErrors(cudaMemcpy(h_retains, tm->retains, numThresholds*sizeof(float), cudaMemcpyDeviceToHost));
 
 		outfile << "Thought Layer " << i << ": " << std::endl;
 		for (size_t j = 0; j < numThresholds; j++) {
-			outfile << h_thresholds[j] << "| " << std::endl;
+			outfile << h_retains[j] << "| " << h_thresholds[j] << "| " << std::endl;
 			for (size_t k = 0; k < totalCon; k++) {
 				outfile << h_weights[k + j*totalCon] << " ";
 			}
@@ -277,17 +351,19 @@ void ThoughtNet::loadWeights(std::string fname) {
 		size_t numThresholds = tp->numOutputs;
 		float* h_weights = new float[numWeights];
 		float* h_thresholds = new float[numThresholds];
+		float* h_retains = new float[numThresholds];
 
 		std::string dum;
 		infile >> dum >> dum >> dum; //Thought Layer #:
 		for (size_t j = 0; j < numThresholds; j++) {
-			infile >> h_thresholds[j] >> dum;
+			infile >> h_retains[j] >> dum >> h_thresholds[j] >> dum;
 			for (size_t k = 0; k < totalCon; k++) {
 				infile >> h_weights[k + j*totalCon];
 			}
 		}
 		checkCudaErrors(cudaMemcpy(tm->weights, h_weights, numWeights*sizeof(float), cudaMemcpyHostToDevice));
 		checkCudaErrors(cudaMemcpy(tm->thresholds, h_thresholds, numThresholds*sizeof(float), cudaMemcpyHostToDevice));
+		checkCudaErrors(cudaMemcpy(tm->retains, h_retains, numThresholds*sizeof(float), cudaMemcpyHostToDevice));
 
 		delete[] h_weights;
 		delete[] h_thresholds;

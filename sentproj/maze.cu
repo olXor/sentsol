@@ -10,6 +10,12 @@
 #define START 4
 #define NONE -1
 
+#define NUM_BOT_TURNS_PER_MOVE 100
+
+#define USE_EXTRA_PLEASURE
+
+//#define OPPOSING_OUTPUTS	//2 outputs instead of 4; left-right and up-down are opposing each other on the same bit
+
 WINDOW* mazewin;
 WINDOW* textwin;
 
@@ -30,7 +36,7 @@ public:
 	Maze(size_t h, size_t w);
 	void displayMaze(WINDOW* win);
 	void writeActorInputs(float* inputs);	//length 4 array
-	void moveActor(WINDOW* win, float* outputs);			//length 4 array
+	bool moveActor(WINDOW* win, float* outputs, size_t* moveTotals);			//length 4 array
 	bool actorOnGoal();
 	size_t Maze::getWallHugLength(bool hugLeft);
 
@@ -49,8 +55,12 @@ private:
 	Position goalPosition;
 };
 
-void printOutputs(WINDOW* win, float* outputs, size_t numOutputs, size_t turn, size_t leftlength, size_t rightlength, size_t mazesSolved, size_t mazesFailed, float mazeaverage);
+void printOutputs(WINDOW* win, float* outputs, size_t numOutputs, size_t moves, size_t turn, size_t level, size_t leftlength, size_t rightlength, size_t mazesSolved, size_t mazesFailed, float mazeaverage, size_t* moveTotals);
 bool positionsSame(Position p1, Position p2);
+
+float pleasurePainLengthMultiplier(size_t length) {
+	return 1.0f/(1.0f - (float)pow(VALUE_DECAY_FACTOR, NUM_BOT_TURNS_PER_MOVE*length));
+}
 
 int main() {
 	srand((unsigned int)time(NULL));
@@ -74,7 +84,13 @@ int main() {
 	size_t mazesize = 2;
 	size_t mazesSolved = 0;
 	size_t mazesFailed = 0;
-	SentBot* bot = new SentBot(4, 4, 4, 4);
+
+#ifdef OPPOSING_OUTPUTS
+	size_t numOutputs = 2;
+#else
+	size_t numOutputs = 4;
+#endif
+	SentBot* bot = new SentBot(4, numOutputs, 4, 4);
 
 	mvwprintw(mazewin, 0, 0, "Do you want to start a new weights file (overwriting the old one)?");
 	wrefresh(mazewin);
@@ -97,30 +113,56 @@ int main() {
 	size_t mazerespos = 0;
 	float excessPain = 0.0f;
 	size_t numWinsInRow = 0;
+	size_t turnsWandering = 0;
+	size_t moves = 0;
+	size_t moveTotals[4] = { 0 };
+	float* convertedOutputs;
+#ifndef OPPOSING_OUTPUTS
+	convertedOutputs = bot->h_outputs;
+#else
+	convertedOutputs = new float[4];
+#endif
+
 	while (true) {
-		Maze* maze = new Maze(mazesize, 2*mazesize);
+		Maze* maze = new Maze(mazesize, 2 * mazesize);
 		size_t leftlength = maze->getWallHugLength(true);
 		size_t rightlength = maze->getWallHugLength(false);
 		size_t largelength = std::max(leftlength, rightlength);
 		maze->displayMaze(mazewin);
-
-		size_t turnsWandering = 0;
+		printOutputs(textwin, convertedOutputs, numOutputs, moves, turnsWandering, mazesize, leftlength, rightlength, mazesSolved, mazesFailed, mazeaverage, moveTotals);
+		turnsWandering = 0;
+		moves = 0;
+		for (size_t i = 0; i < 4; i++)
+			moveTotals[i] = 0;
 		while (true) {
 			turnsWandering++;
 			turn++;
-			for (size_t i = 0; i < 100; i++) {
+			for (size_t i = 0; i < NUM_BOT_TURNS_PER_MOVE; i++) {
 				maze->writeActorInputs(bot->h_inputs);
 				bot->takeTurn();
 			}
-			maze->moveActor(mazewin, bot->h_outputs);
+#ifdef OPPOSING_OUTPUTS
+			convertedOutputs[0] = bot->h_outputs[0] - THOUGHT_BASELINE - 0.5;
+			convertedOutputs[1] = bot->h_outputs[1] - THOUGHT_BASELINE - 0.5;
+			convertedOutputs[2] = 0.5 + THOUGHT_BASELINE - bot->h_outputs[0];
+			convertedOutputs[3] = 0.5 + THOUGHT_BASELINE - bot->h_outputs[1];
+#endif
+			if (maze->moveActor(mazewin, convertedOutputs, moveTotals)) {
+				moves++;
+			}
 			if (maze->actorOnGoal()) {
 				float extraPleasure = 0.0;
 				numWinsInRow++;
 				if (excessPain > 0.0f) {
-					extraPleasure = std::min(excessPain, numWinsInRow*1.0f);
+					//extraPleasure = std::min(excessPain, numWinsInRow*1.0f);
+					extraPleasure = excessPain;
 				}
 				excessPain -= extraPleasure + 1.0f;
-				bot->givePleasurePain(1.0f + extraPleasure);
+#ifndef USE_EXTRA_PLEASURE
+				extraPleasure = 0.0f;
+#endif
+				float pleasure = pleasurePainLengthMultiplier(turnsWandering)*(1.0f + extraPleasure);
+				bot->givePleasurePain(pleasure);
 				mazesSolved++;
 				if (mazesize < 30)
 					mazesize++;
@@ -129,7 +171,8 @@ int main() {
 			else if (turnsWandering >= 10 * largelength) {
 				numWinsInRow = 0;
 				excessPain += 1.0f;
-				bot->givePleasurePain(-1.0f);
+				float pain = -1.0f * pleasurePainLengthMultiplier(turnsWandering);
+				bot->givePleasurePain(pain);
 				mazesFailed++;
 				if (mazesize > 2)
 					mazesize--;
@@ -148,8 +191,6 @@ int main() {
 			mazeaverage /= NUM_MAZE_AVERAGE_RESULTS;
 			avghistory << mazeaverage << std::endl;
 		}
-		printOutputs(textwin, bot->h_outputs, 4, turnsWandering, leftlength, rightlength, mazesSolved, mazesFailed, mazeaverage);
-
 		delete maze;
 	}
 }
@@ -364,7 +405,7 @@ void Maze::writeActorInputs(float* inputs) {
 		inputs[3] = -1.0f;
 }
 
-void Maze::moveActor(WINDOW* win, float* outputs) {
+bool Maze::moveActor(WINDOW* win, float* outputs, size_t* moveTotals) {
 	int dir = NONE;
 	float maxout = -9999;
 	for (size_t i = 0; i < 4; i++) {
@@ -373,13 +414,16 @@ void Maze::moveActor(WINDOW* win, float* outputs) {
 			maxout = outputs[i];
 		}
 	}
+	moveTotals[dir]++;
 	if (directionOpen(actorPosition, dir)) {
 		mvwaddch(win, (int)(2 * actorPosition.y + 1), (int)(2 * actorPosition.x + 1), ' ');
 		actorPosition = getAdjacentPosition(actorPosition, dir);
 		mvwaddch(win, (int)(2 * actorPosition.y + 1), (int)(2 * actorPosition.x + 1), '@');
 
 		wrefresh(win);
+		return true;
 	}
+	return false;
 }
 
 bool Maze::actorOnGoal() {
@@ -390,27 +434,50 @@ bool positionsSame(Position p1, Position p2) {
 	return p1.x == p2.x && p1.y == p2.y;
 }
 
-void printOutputs(WINDOW* win, float* outputs, size_t numOutputs, size_t turn, size_t leftlength, size_t rightlength, size_t mazesSolved, size_t mazesFailed, float mazeaverage) {
+void printOutputs(WINDOW* win, float* outputs, size_t numOutputs, size_t moves, size_t turn, size_t level, size_t leftlength, size_t rightlength, size_t mazesSolved, size_t mazesFailed, float mazeaverage, size_t* moveTotals) {
+	werase(win);
 	std::stringstream ss;
-	ss << turn;
+	ss << moves << "/" << turn << "(";
+	if (turn != 0)
+		ss << 1.0f*moves / turn;
+	ss << ")";
 	mvwprintw(win, 0, 0, ss.str().c_str());
+
+	size_t allMoveTotal = 0;
+	for (size_t i = 0; i < 4; i++) {
+		allMoveTotal += moveTotals[i];
+	}
 
 	for (size_t i = 0; i < 4; i++) {
 		ss.clear();
 		ss.str("");
+		if (i == 0)
+			ss << "Down: ";
+		else if (i == 1)
+			ss << "Right: ";
+		else if (i == 2)
+			ss << "Up: ";
+		else if (i == 3)
+			ss << "Left: ";
 		ss << outputs[i];
+		ss << " (" << moveTotals[i] << "; " << 1.0f*moveTotals[i] / allMoveTotal << ")";
 
 		mvwprintw(win, i + 1, 0, ss.str().c_str());
 	}
 
 	std::stringstream lss;
+	lss << "Maze Level: " << level;
+	mvwprintw(win, 6, 0, lss.str().c_str());
+
+	lss.clear();
+	lss.str("");
 	lss << "L: " << leftlength;
 	mvwprintw(win, 7, 0, lss.str().c_str());
 
 	lss.clear();
 	lss.str("");
 	lss << "R: " << rightlength;
-	mvwprintw(win, 7, 5, lss.str().c_str());
+	mvwprintw(win, 7, 7, lss.str().c_str());
 
 	lss.clear();
 	lss.str("");
